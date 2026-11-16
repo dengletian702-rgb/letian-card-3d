@@ -55,35 +55,38 @@ camera.position.set(0, 0, 12);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
-controls.dampingFactor = 0.08;
+controls.dampingFactor = 0.055;
 controls.enablePan = false;
 controls.zoomToCursor = true;
-controls.rotateSpeed = 0.85;
+controls.rotateSpeed = 1.05;
 controls.zoomSpeed = 0.9;
 controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
-controls.minPolarAngle = Math.PI * 0.22;
-controls.maxPolarAngle = Math.PI * 0.78;
+// Yaw is unlimited in both directions. Polar only tilts enough for a three-quarter view.
+controls.minAzimuthAngle = -Infinity;
+controls.maxAzimuthAngle = Infinity;
+controls.minPolarAngle = Math.PI / 2 - 0.62;
+controls.maxPolarAngle = Math.PI / 2 + 0.48;
 controls.target.set(0, 0, 0);
 
-const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 1.05);
+const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 0.78);
 scene.add(hemi);
 
 // Warm key from the upper left. Intensities stay constant through the flip.
-const key = new THREE.DirectionalLight(0xfff4e8, 2.85);
+const key = new THREE.DirectionalLight(0xfff4e8, 2.05);
 key.position.set(-6.2, 8.2, 7.4);
 scene.add(key);
 
-const fill = new THREE.DirectionalLight(0xcfd8ff, 1.05);
+const fill = new THREE.DirectionalLight(0xcfd8ff, 0.72);
 fill.position.set(6.4, 2.4, 5.6);
 scene.add(fill);
 
-const rim = new THREE.DirectionalLight(0xfff1dc, 0.95);
+const rim = new THREE.DirectionalLight(0xfff1dc, 0.62);
 rim.position.set(1.2, 4.6, -7.6);
 scene.add(rim);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.55;
+scene.environmentIntensity = 0.42;
 pmrem.dispose();
 
 const composer = new EffectComposer(renderer);
@@ -117,6 +120,7 @@ const state = {
   bounds: null,
 };
 
+let decor = null;
 let reduceMotion = motionQuery.matches;
 let idleTimer = 0;
 
@@ -150,17 +154,27 @@ controls.addEventListener('end', () => {
 });
 canvas.addEventListener('wheel', poke, { passive: true });
 
+function wrapAngle(angle) {
+  const full = Math.PI * 2;
+  return ((angle + Math.PI) % full + full) % full - Math.PI;
+}
+
 function flip() {
   if (!state.ready || state.flipping) return;
-  state.face = state.face === 'front' ? 'back' : 'front';
-  state.flipFrom = pivot.rotation.y;
-  let target = state.face === 'back' ? Math.PI : 0;
-  // Keep turning in the same direction so a second flip doesn't unwind awkwardly.
-  if (target < state.flipFrom - Math.PI * 0.5) target += Math.PI * 2;
-  state.flipTo = target;
+  const cam = new THREE.Vector3();
+  camera.getWorldPosition(cam).sub(controls.target);
+  const camAngle = Math.atan2(cam.x, cam.z);
+  const yaw = pivot.rotation.y;
+  const seeingFront = Math.cos(wrapAngle(camAngle - yaw)) > 0;
+  const desired = seeingFront ? camAngle + Math.PI : camAngle;
+  const delta = wrapAngle(desired - yaw);
+  state.face = seeingFront ? 'back' : 'front';
+  state.flipFrom = yaw;
+  state.flipTo = yaw + (Math.abs(delta) < 1e-4 ? Math.PI : delta);
   state.flipStart = performance.now();
   state.flipping = true;
   controls.autoRotate = false;
+  controls.enabled = false;
   flipButton.setAttribute('aria-pressed', state.face === 'back' ? 'true' : 'false');
   startBurst();
 }
@@ -276,10 +290,548 @@ function tuneTextures(root) {
   });
 }
 
+function hideFrontDecor(name) {
+  if (!name || name === 'alien-grass') return false;
+  return (
+    name.startsWith('alien-grass') ||
+    name.startsWith('alien-flora') ||
+    name.startsWith('mushroom') ||
+    name.startsWith('moon') ||
+    name.startsWith('rock-pillar') ||
+    name.startsWith('planet') ||
+    name.startsWith('asteroid') ||
+    name.startsWith('pond') ||
+    name.startsWith('spore') ||
+    name.startsWith('glow') ||
+    name.startsWith('crystal') ||
+    name.startsWith('name-flower') ||
+    name.startsWith('grass-glow')
+  );
+}
+
+function dressCard(root) {
+  const gold = new THREE.MeshStandardMaterial({
+    color: 0xb08a3a,
+    metalness: 0.7,
+    roughness: 0.4,
+    emissive: 0x3a280c,
+    emissiveIntensity: 0.08,
+    envMapIntensity: 0.55,
+    side: THREE.DoubleSide,
+  });
+  root.traverse((object) => {
+    const name = object.name || '';
+    if (hideFrontDecor(name)) object.visible = false;
+    if (object.isMesh && (name.startsWith('text-') || name.startsWith('txt'))) object.material = gold;
+  });
+  applyRegolith(root.getObjectByName('alien-grass'));
+  const faceA = root.getObjectByName('faceA-alien');
+  const faceB = root.getObjectByName('faceB-forest');
+  const front = buildFrontSky(faceA);
+  const forest = buildForestLife(faceB);
+  return {
+    update(now, reduced) {
+      const t = now * 0.001;
+      front.update(t, reduced);
+      forest.update(t, reduced);
+    },
+  };
+}
+
+function applyRegolith(mesh) {
+  if (!mesh || !mesh.material) return;
+  const maps = makeRegolithMaps();
+  const material = mesh.material;
+  material.map = maps.color;
+  material.normalMap = maps.normal;
+  material.normalScale?.set(0.85, 0.85);
+  material.color?.set(0xffffff);
+  material.roughness = 0.92;
+  material.metalness = 0.02;
+  if (material.emissive) material.emissive.set(0x000000);
+  material.emissiveIntensity = 0;
+  material.emissiveMap = null;
+  material.needsUpdate = true;
+  const geometry = mesh.geometry;
+  const position = geometry?.getAttribute('position');
+  if (position && !geometry.getAttribute('uv')) {
+    const uv = new Float32Array(position.count * 2);
+    for (let i = 0; i < position.count; i += 1) {
+      uv[i * 2] = (position.getX(i) + 4.6) / 9.2;
+      uv[i * 2 + 1] = (position.getZ(i) + 2.8) / 5.6;
+    }
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  }
+  try {
+    if (geometry && geometry.getAttribute('uv') && geometry.getAttribute('normal') && geometry.index) {
+      geometry.computeTangents();
+    }
+  } catch {
+    material.normalMap = null;
+  }
+}
+
+function makeRegolithMaps() {
+  const size = 512;
+  const height = new Float32Array(size * size);
+  const rand = mulberry32(0x51a7);
+  for (let i = 0; i < height.length; i += 1) height[i] = rand() * 0.35;
+  for (let c = 0; c < 90; c += 1) {
+    const cx = Math.floor(rand() * size);
+    const cy = Math.floor(rand() * size);
+    const radius = 3 + rand() * (c < 10 ? 46 : 12);
+    const depth = 0.25 + rand() * 0.55;
+    for (let y = Math.max(0, cy - radius); y < Math.min(size, cy + radius); y += 1) {
+      for (let x = Math.max(0, cx - radius); x < Math.min(size, cx + radius); x += 1) {
+        const dx = (x - cx) / radius;
+        const dy = (y - cy) / radius;
+        const d = dx * dx + dy * dy;
+        if (d < 1) {
+          const bowl = (1 - d) * depth;
+          const rim = d > 0.72 && d < 1 ? (1 - Math.abs(d - 0.86) / 0.14) * 0.18 : 0;
+          height[y * size + x] += rim - bowl;
+        }
+      }
+    }
+  }
+  const color = document.createElement('canvas');
+  color.width = size;
+  color.height = size;
+  const cg = color.getContext('2d');
+  const image = cg.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const h = height[y * size + x];
+      const n = rand();
+      const shade = 78 + h * 150 + n * 28;
+      const i = (y * size + x) * 4;
+      image.data[i] = shade + 6;
+      image.data[i + 1] = shade + 4;
+      image.data[i + 2] = shade + 1;
+      image.data[i + 3] = 255;
+    }
+  }
+  cg.putImageData(image, 0, 0);
+  const colorTex = new THREE.CanvasTexture(color);
+  colorTex.colorSpace = THREE.SRGBColorSpace;
+  colorTex.wrapS = colorTex.wrapT = THREE.RepeatWrapping;
+  colorTex.repeat.set(2, 1.4);
+
+  const normal = document.createElement('canvas');
+  normal.width = size;
+  normal.height = size;
+  const ng = normal.getContext('2d');
+  const nimage = ng.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const hL = height[y * size + ((x + size - 1) % size)];
+      const hR = height[y * size + ((x + 1) % size)];
+      const hD = height[((y + size - 1) % size) * size + x];
+      const hU = height[((y + 1) % size) * size + x];
+      const dx = (hL - hR) * 2.2;
+      const dy = (hD - hU) * 2.2;
+      const i = (y * size + x) * 4;
+      nimage.data[i] = (dx * 0.5 + 0.5) * 255;
+      nimage.data[i + 1] = (dy * 0.5 + 0.5) * 255;
+      nimage.data[i + 2] = 255;
+      nimage.data[i + 3] = 255;
+    }
+  }
+  ng.putImageData(nimage, 0, 0);
+  const normalTex = new THREE.CanvasTexture(normal);
+  normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping;
+  normalTex.repeat.set(2, 1.4);
+  return { color: colorTex, normal: normalTex };
+}
+
+function buildFrontSky(faceA) {
+  const group = new THREE.Group();
+  faceA.add(group);
+  const sun = buildSun();
+  sun.group.position.set(4.72, 1.72, -2.15);
+  group.add(sun.group);
+  const saturn = buildSaturn();
+  saturn.group.position.set(4.15, 1.22, 2.25);
+  group.add(saturn.group);
+  const debris = buildDebris();
+  group.add(debris.mesh);
+  return {
+    update(t, reduced) {
+      const flick = reduced ? 0 : Math.sin(t * 2.6) * 0.06 + Math.sin(t * 6.1) * 0.03;
+      sun.material.emissiveIntensity = 1.35 + flick;
+      sun.corona.material.opacity = 0.42 + flick;
+      if (!reduced) sun.paint(t);
+      saturn.spin.rotation.y = reduced ? 0.4 : t * 0.32;
+      debris.update(t, reduced);
+    },
+  };
+}
+
+function buildSun() {
+  const painted = makeSunTexture();
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xfff1d2,
+    emissive: 0xffb15a,
+    emissiveMap: painted.tex,
+    emissiveIntensity: 1.05,
+    roughness: 0.55,
+    metalness: 0,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.46, 32, 24), material);
+  const coronaMap = makeGlowTexture('#ffd2a1');
+  const corona = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: coronaMap,
+    color: 0xffc48a,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  corona.scale.set(2.15, 2.15, 1);
+  const group = new THREE.Group();
+  group.add(mesh, corona);
+  return { group, material, corona, paint: painted.paint };
+}
+
+function buildSaturn() {
+  const material = new THREE.MeshStandardMaterial({
+    map: makeSaturnTexture(),
+    roughness: 0.62,
+    metalness: 0.04,
+    color: 0xffffff,
+  });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.4, 32, 24), material);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.58, 0.98, 64),
+    new THREE.MeshStandardMaterial({
+      map: makeRingTexture(),
+      transparent: true,
+      side: THREE.DoubleSide,
+      roughness: 0.55,
+      metalness: 0.08,
+      depthWrite: false,
+    }),
+  );
+  ring.rotation.x = Math.PI / 2.7;
+  const spin = new THREE.Group();
+  spin.add(body, ring);
+  spin.rotation.x = 0.55;
+  const group = new THREE.Group();
+  group.add(spin);
+  return { group, spin };
+}
+
+function buildDebris() {
+  const geometry = new THREE.IcosahedronGeometry(1, 0);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x8d8882,
+    roughness: 0.92,
+    metalness: 0.04,
+  });
+  const count = 12;
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  const seeds = [];
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < count; i += 1) {
+    const angle = (i / count) * Math.PI * 2;
+    seeds.push({
+      base: new THREE.Vector3(5.05 + Math.cos(angle) * 0.85, 1.05 + (i % 4) * 0.32, -0.2 + Math.sin(angle) * 2.15),
+      scale: 0.05 + (i % 3) * 0.025,
+      phase: i * 1.3,
+      spin: 0.2 + (i % 5) * 0.07,
+    });
+  }
+  const built = {
+    mesh,
+    update(t, reduced) {
+      const time = reduced ? 0 : t;
+      for (let i = 0; i < count; i += 1) {
+        const seed = seeds[i];
+        dummy.position.copy(seed.base);
+        dummy.position.y += Math.sin(time * 0.35 + seed.phase) * 0.12;
+        dummy.position.x += Math.cos(time * 0.22 + seed.phase) * 0.08;
+        dummy.rotation.set(time * seed.spin, time * seed.spin * 0.7, 0);
+        dummy.scale.setScalar(seed.scale);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+    },
+  };
+  built.update(0, true);
+  return built;
+}
+
+function buildForestLife(faceB) {
+  const group = new THREE.Group();
+  faceB.add(group);
+  const clouds = buildClouds();
+  const butterflies = buildButterflies();
+  const fireflies = buildFireflies();
+  group.add(clouds.group, butterflies.group, fireflies.points);
+  return {
+    update(t, reduced) {
+      const time = reduced ? 0 : t;
+      clouds.update(time);
+      butterflies.update(time, reduced);
+      fireflies.update(time, reduced);
+    },
+  };
+}
+
+function buildClouds() {
+  const map = makeGlowTexture('#ffffff');
+  const group = new THREE.Group();
+  const clouds = [];
+    const spots = [
+    [2.6, 1.35, -0.2, 1.15],
+    [3.5, 1.7, 0.55, 1.35],
+    [1.9, 1.15, 1.05, 0.95],
+    [4.0, 1.45, -1.15, 1.05],
+  ];
+  for (let i = 0; i < spots.length; i += 1) {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map,
+      color: 0xf4f1ea,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+    }));
+    const [x, y, z, scale] = spots[i];
+    sprite.position.set(x, y, z);
+    sprite.scale.set(scale, scale * 0.62, 1);
+    group.add(sprite);
+    clouds.push({ sprite, x, y, z, scale, phase: i * 1.7 });
+  }
+  return {
+    group,
+    update(t) {
+      for (const cloud of clouds) {
+        cloud.sprite.position.x = cloud.x + Math.sin(t * 0.08 + cloud.phase) * 0.35;
+        cloud.sprite.position.z = cloud.z + Math.cos(t * 0.06 + cloud.phase) * 0.22;
+        cloud.sprite.position.y = cloud.y + Math.sin(t * 0.12 + cloud.phase) * 0.06;
+      }
+    },
+  };
+}
+
+function buildButterflies() {
+  const group = new THREE.Group();
+  const items = [];
+  const spots = [
+    [-2.6, 0.42, 0.4],
+    [-1.4, 0.55, -1.3],
+    [-3.1, 0.36, 1.4],
+    [0.8, 0.48, 1.8],
+  ];
+  for (let i = 0; i < spots.length; i += 1) {
+    const wing = new THREE.MeshStandardMaterial({
+      color: i % 2 ? 0xf4efe2 : 0xe7d7b0,
+      roughness: 0.55,
+      metalness: 0.04,
+      side: THREE.DoubleSide,
+      emissive: 0x2a2112,
+      emissiveIntensity: 0.12,
+    });
+    const geo = new THREE.PlaneGeometry(0.14, 0.09);
+    const left = new THREE.Mesh(geo, wing);
+    const right = new THREE.Mesh(geo, wing);
+    left.position.x = -0.06;
+    right.position.x = 0.06;
+    const bug = new THREE.Group();
+    bug.add(left, right);
+    bug.position.set(spots[i][0], spots[i][1], spots[i][2]);
+    group.add(bug);
+    items.push({ bug, left, right, home: spots[i], phase: i * 1.4 });
+  }
+  return {
+    group,
+    update(t, reduced) {
+      for (const item of items) {
+        const flap = reduced ? 0.4 : Math.sin(t * 9 + item.phase);
+        item.left.rotation.y = 0.4 + flap * 0.7;
+        item.right.rotation.y = -0.4 - flap * 0.7;
+        const [x, y, z] = item.home;
+        item.bug.position.set(
+          x + Math.sin(t * 0.45 + item.phase) * 0.28,
+          y + Math.sin(t * 0.9 + item.phase) * 0.08,
+          z + Math.cos(t * 0.38 + item.phase) * 0.22,
+        );
+        item.bug.rotation.y = t * 0.4 + item.phase;
+      }
+    },
+  };
+}
+
+function buildFireflies() {
+  const count = 22;
+  const positions = new Float32Array(count * 3);
+  const phases = new Float32Array(count);
+  const homes = [];
+  for (let i = 0; i < count; i += 1) {
+    const left = i < 12;
+    const x = left ? -3.6 + (i % 4) * 0.55 : 1.6 + (i % 4) * 0.55;
+    const z = left ? -1.8 + Math.floor(i / 4) * 0.85 : -1.6 + Math.floor((i - 12) / 4) * 0.9;
+    const y = 0.2 + (i % 4) * 0.08;
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+    phases[i] = i * 0.7;
+    homes.push({ x, y, z, phase: phases[i] });
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('phase', new THREE.BufferAttribute(phases, 1));
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      attribute float phase;
+      varying float vBlink;
+      uniform float uTime;
+      void main() {
+        float blink = 0.25 + 0.75 * pow(max(sin(uTime * 1.5 + phase), 0.0), 2.0);
+        vBlink = blink;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = (5.5 + 6.0 * blink) * (7.0 / max(0.001, -mv.z));
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      varying float vBlink;
+      void main() {
+        vec2 p = gl_PointCoord * 2.0 - 1.0;
+        float d = dot(p, p);
+        if (d > 1.0) discard;
+        float a = smoothstep(1.0, 0.15, d) * vBlink;
+        gl_FragColor = vec4(1.05, 0.92, 0.38, 1.0) * a;
+      }
+    `,
+  });
+  const points = new THREE.Points(geometry, material);
+  const position = geometry.getAttribute('position');
+  return {
+    points,
+    update(t, reduced) {
+      material.uniforms.uTime.value = reduced ? 1.2 : t;
+      if (reduced) return;
+      for (let i = 0; i < homes.length; i += 1) {
+        const home = homes[i];
+        position.setXYZ(
+          i,
+          home.x + Math.sin(t * 0.33 + home.phase) * 0.12,
+          home.y + Math.sin(t * 0.5 + home.phase) * 0.05,
+          home.z + Math.cos(t * 0.27 + home.phase) * 0.1,
+        );
+      }
+      position.needsUpdate = true;
+    },
+  };
+}
+
+function makeSunTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const paint = (time) => {
+    const image = ctx.createImageData(size, size);
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const n = hashNoise(x * 0.08 + time * 0.7, y * 0.08 - time * 0.45);
+        const heat = n;
+        const i = (y * size + x) * 4;
+        image.data[i] = 180 + heat * 75;
+        image.data[i + 1] = 40 + heat * 150;
+        image.data[i + 2] = 8 + heat * 30;
+        image.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    texture.needsUpdate = true;
+  };
+  paint(0);
+  return { tex: texture, paint };
+}
+
+function makeSaturnTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const bands = ['#e6d3a1', '#c9ae78', '#efe2c2', '#b99662', '#dfc99a', '#a88455', '#f3e6c8'];
+  bands.forEach((color, i) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(0, (i * canvas.height) / bands.length, canvas.width, canvas.height / bands.length + 1);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeRingTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 256, 32);
+  const bands = [0.15, 0.55, 0.28, 0.72, 0.2, 0.48, 0.12];
+  bands.forEach((alpha, i) => {
+    ctx.fillStyle = `rgba(226, 210, 176, ${alpha})`;
+    const y = (i * 32) / bands.length;
+    ctx.fillRect(0, y, 256, 32 / bands.length);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeGlowTexture(hex) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const glow = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  glow.addColorStop(0, hex);
+  glow.addColorStop(0.22, hex);
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function hashNoise(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  const a = s - Math.floor(s);
+  const t = Math.sin((x + 4.2) * 91.3 + (y - 2.1) * 157.7) * 23421.631;
+  const b = t - Math.floor(t);
+  return a * 0.65 + b * 0.35;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a += 0x6d2b79f5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function onLoaded(gltf) {
   const model = gltf.scene;
   pivot.add(model);
   tuneTextures(model);
+  decor = dressCard(model);
   resize();
   frameCamera();
   state.ready = true;
@@ -317,10 +869,12 @@ function animate() {
     if (t >= 1) {
       pivot.rotation.y = state.flipTo;
       state.flipping = false;
+      controls.enabled = true;
       scheduleAutoRotate();
     }
   }
   updateBurst(now);
+  if (decor) decor.update(now, reduceMotion);
   controls.update();
   composer.render();
   if (burst.group.visible) {
@@ -382,6 +936,17 @@ window.__card = {
    * Hold the flip at progress u (0 front, 1 back) for screenshots.
    * Pass null to release the scrub.
    */
+  look(azimuth, polar) {
+    const dist = Math.max(camera.position.distanceTo(controls.target), 8);
+    const safePolar = THREE.MathUtils.clamp(polar, controls.minPolarAngle, controls.maxPolarAngle);
+    camera.position.set(
+      controls.target.x + dist * Math.sin(safePolar) * Math.sin(azimuth),
+      controls.target.y + dist * Math.cos(safePolar),
+      controls.target.z + dist * Math.sin(safePolar) * Math.cos(azimuth),
+    );
+    camera.lookAt(controls.target);
+    controls.update();
+  },
   previewFlip(u) {
     if (u === null || u === undefined) {
       state.scrub = null;
