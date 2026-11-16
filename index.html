@@ -8,7 +8,7 @@
       name="description"
       content="Interactive 3D floating card island — Letian Deng's business card. Drag to rotate, scroll or pinch to zoom, and flip between the front and the back."
     />
-    <meta name="theme-color" content="#efe4f6" />
+    <meta name="theme-color" content="#05060a" />
     <link rel="canonical" href="https://dengletian702-rgb.github.io/letian-card-3d/" />
     <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
     <meta property="og:type" content="website" />
@@ -32,13 +32,14 @@
   <body>
     <div id="app">
       <canvas id="view" aria-label="Letian Deng 3D business card. Drag to rotate."></canvas>
-      <p id="hint">
-        <span lang="zh-CN">拖拽旋转 · 滚轮或双指缩放 · 双击翻转</span>
-        <span class="hint-en">Drag to rotate · Scroll or pinch to zoom · Double-tap to flip</span>
-      </p>
-      <button id="flip" type="button" aria-label="Flip the card">
-        <span lang="zh-CN">翻转</span>
-        <span class="flip-en">Flip</span>
+      <p id="hint">Drag · Zoom</p>
+      <button id="flip" type="button" aria-label="Flip card">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M32 10 L51.05 43 L12.95 43 Z M51.05 21 L32 54 L12.95 21 Z"
+          />
+        </svg>
       </button>
       <footer>
         <span>Letian Deng · AI · <span lang="zh-CN">营销</span> · <span lang="zh-CN">设计</span></span>

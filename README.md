@@ -2,7 +2,7 @@
 
 An interactive, static viewer for Letian Deng's floating card island: a two-sided 3D business card you can turn over in the browser.
 
-The front is the alien face (name, portrait, tagline). The back is the forest face (contact details and a WhatsApp QR code). Drag to orbit, scroll or pinch to zoom, and press **翻转 / Flip** or double-tap the card to swap faces. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
+The front is the alien face (name, portrait, tagline). The back is the forest face (contact details and a WhatsApp QR code). Drag to orbit, scroll or pinch to zoom, and press the star or double-tap the card to swap faces. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
 
 Live site (after GitHub Pages is enabled): <https://dengletian702-rgb.github.io/letian-card-3d/>
 
