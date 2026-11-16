@@ -430,9 +430,11 @@ function addTypeShadows(root) {
   }
 }
 
+const PLATE_RADIUS = 0.12;
+const PLATE_HAIRLINE = 0.01;
+
 function addBackPlates(faceB) {
   if (!faceB) return;
-  const material = makeCharcoalPlateMaterial();
   const texts = [];
   faceB.updateWorldMatrix(true, true);
   faceB.traverse((object) => {
@@ -453,7 +455,7 @@ function addBackPlates(faceB) {
       maxZ: Math.max(corners[0].z, corners[1].z),
     });
   });
-  const column = texts.filter((item) => item.maxX < -0.95 && !/whatsapp/i.test(item.name));
+  const column = texts.filter((item) => !/whatsapp/i.test(item.name) && item.maxX < -0.4);
   if (column.length) {
     let minX = Infinity;
     let maxX = -Infinity;
@@ -465,49 +467,127 @@ function addBackPlates(faceB) {
       minZ = Math.min(minZ, item.minZ);
       maxZ = Math.max(maxZ, item.maxZ);
     }
-    // Stay clear of the QR tile, which sits just to the right of the column.
-    maxX = Math.min(maxX, -1.22);
-    addSoftPlate(faceB, material, minX, maxX, minZ, maxZ, 0.42, 0.32);
+    addFrostedPlate(faceB, minX - 0.18, maxX + 0.16, minZ - 0.16, maxZ + 0.16);
   }
   const whats = texts.find((item) => /whatsapp/i.test(item.name));
   if (whats) {
-    addSoftPlate(faceB, material, whats.minX, whats.maxX, whats.minZ, whats.maxZ, 0.34, 0.2);
+    addFrostedPlate(faceB, whats.minX - 0.14, whats.maxX + 0.14, whats.minZ - 0.07, whats.maxZ + 0.07);
   }
 }
 
-function addSoftPlate(parent, material, minX, maxX, minZ, maxZ, padX, padZ) {
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(maxX - minX + padX * 2, maxZ - minZ + padZ * 2), material);
+function addFrostedPlate(parent, minX, maxX, minZ, maxZ) {
+  const width = maxX - minX;
+  const height = maxZ - minZ;
+  const radius = Math.min(PLATE_RADIUS, width / 2, height / 2);
+  const centerX = (minX + maxX) / 2;
+  const centerZ = (minZ + maxZ) / 2;
+
+  const shadow = makePlateShadow(width, height, radius);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(centerX + 0.02, 0.004, centerZ + 0.016);
+  shadow.renderOrder = -4;
+  parent.add(shadow);
+
+  const hairline = new THREE.Mesh(
+    new THREE.ShapeGeometry(roundedRectRing(width, height, radius, PLATE_HAIRLINE), 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xf4f2ec,
+      transparent: true,
+      opacity: 0.15,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  hairline.name = 'contact-plate-hairline';
+  hairline.rotation.x = -Math.PI / 2;
+  hairline.position.set(centerX, 0.008, centerZ);
+  hairline.renderOrder = -3;
+  parent.add(hairline);
+
+  const plate = new THREE.Mesh(
+    new THREE.ShapeGeometry(roundedRectShape(width, height, radius), 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x0c100c,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
   plate.name = 'contact-plate';
   plate.rotation.x = -Math.PI / 2;
-  plate.position.set((minX + maxX) / 2, 0.01, (minZ + maxZ) / 2);
+  plate.position.set(centerX, 0.012, centerZ);
   plate.renderOrder = -2;
   parent.add(plate);
 }
 
-function makeCharcoalPlateMaterial() {
-  const size = 512;
+function roundedRectShape(width, height, radius) {
+  const shape = new THREE.Shape();
+  traceRoundedRect(shape, width, height, radius, false);
+  return shape;
+}
+
+function roundedRectRing(width, height, radius, stroke) {
+  const outer = roundedRectShape(width + stroke * 2, height + stroke * 2, radius + stroke);
+  const hole = new THREE.Path();
+  traceRoundedRect(hole, width, height, radius, true);
+  outer.holes.push(hole);
+  return outer;
+}
+
+function traceRoundedRect(path, width, height, radius, reversed) {
+  const x = -width / 2;
+  const y = -height / 2;
+  const r = Math.max(0.001, Math.min(radius, width / 2, height / 2));
+  if (!reversed) {
+    path.moveTo(x + r, y);
+    path.lineTo(x + width - r, y);
+    path.absarc(x + width - r, y + r, r, -Math.PI / 2, 0, false);
+    path.lineTo(x + width, y + height - r);
+    path.absarc(x + width - r, y + height - r, r, 0, Math.PI / 2, false);
+    path.lineTo(x + r, y + height);
+    path.absarc(x + r, y + height - r, r, Math.PI / 2, Math.PI, false);
+    path.lineTo(x, y + r);
+    path.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5, false);
+    return;
+  }
+  path.moveTo(x + r, y);
+  path.absarc(x + r, y + r, r, Math.PI * 1.5, Math.PI, true);
+  path.lineTo(x, y + height - r);
+  path.absarc(x + r, y + height - r, r, Math.PI, Math.PI / 2, true);
+  path.lineTo(x + width - r, y + height);
+  path.absarc(x + width - r, y + height - r, r, Math.PI / 2, 0, true);
+  path.lineTo(x + width, y + r);
+  path.absarc(x + width - r, y + r, r, 0, -Math.PI / 2, true);
+}
+
+function makePlateShadow(width, height, radius) {
+  const ppm = 96;
+  const blur = 0.055;
+  const pad = blur * 2.6;
   const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
+  canvas.width = Math.max(8, Math.ceil((width + pad * 2) * ppm));
+  canvas.height = Math.max(8, Math.ceil((height + pad * 2) * ppm));
   const g = canvas.getContext('2d');
-  g.clearRect(0, 0, size, size);
-  const inset = 54;
-  // The meadow is bright yellow-green, so 0.62 still reads olive.
-  // A darker core keeps the contact lines on charcoal; the blur feathers the edge.
-  g.filter = 'blur(18px)';
-  g.fillStyle = 'rgba(12, 14, 16, 0.94)';
-  traceRoundRect(g, inset, inset, size - inset * 2, size - inset * 2, 78);
+  g.clearRect(0, 0, canvas.width, canvas.height);
+  g.filter = `blur(${Math.max(1, blur * ppm)}px)`;
+  g.fillStyle = 'rgba(0, 0, 0, 0.32)';
+  traceRoundRect(g, pad * ppm, pad * ppm, width * ppm, height * ppm, radius * ppm);
   g.fill();
   g.filter = 'none';
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 4;
-  return new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false,
-    toneMapped: true,
-  });
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + pad * 2, height + pad * 2),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  mesh.name = 'contact-plate-shadow';
+  return mesh;
 }
 
 function traceRoundRect(ctx, x, y, w, h, r) {
