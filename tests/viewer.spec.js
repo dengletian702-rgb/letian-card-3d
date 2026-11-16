@@ -4,7 +4,8 @@ import path from 'node:path';
 
 const ARTIFACTS = process.env.SCREENSHOT_DIR || '/opt/cursor/artifacts';
 
-async function waitForCard(page) {
+async function waitForCard(page, { reduced = true } = {}) {
+  if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/letian-card-3d/');
   await page.waitForFunction(
     () => window.__card && window.__card.ready && window.__card.frames > 2,
@@ -98,6 +99,12 @@ test('mobile viewport shows the front face', async ({ browser }) => {
   const page = await context.newPage();
   await waitForCard(page);
   await page.screenshot({ path: path.join(ARTIFACTS, 'front-mobile.png') });
+  await page.evaluate(() => {
+    window.__card.zoomTo(11);
+    window.__card.look(0.72, Math.PI / 2 - 0.38);
+  });
+  await page.screenshot({ path: path.join(ARTIFACTS, 'three-quarter-mobile.png') });
+  await page.evaluate(() => window.__card.look(0, Math.PI / 2));
 
   const box = await page.locator('#view').boundingBox();
   const before = await page.evaluate(() => window.__card.camera.slice());
@@ -141,6 +148,27 @@ test('mobile viewport shows the front face', async ({ browser }) => {
   await context.close();
 });
 
+test('relief reads at three-quarter and grazing angles', async ({ page }) => {
+  await waitForCard(page);
+  await page.evaluate(() => {
+    window.__card.zoomTo(11);
+    window.__card.look(0.72, Math.PI / 2 - 0.4);
+  });
+  await page.screenshot({ path: path.join(ARTIFACTS, 'three-quarter-desktop.png') });
+
+  await page.evaluate(() => {
+    window.__card.zoomTo(6.2);
+    window.__card.look(1.2, Math.PI / 2 - 0.04);
+  });
+  await page.screenshot({ path: path.join(ARTIFACTS, 'surface-graze.png') });
+
+  await page.evaluate(() => {
+    window.__card.zoomTo(4.4);
+    window.__card.look(0.95, Math.PI / 2 - 0.48);
+  });
+  await page.screenshot({ path: path.join(ARTIFACTS, 'surface-closeup.png') });
+});
+
 test('hexagram burst is visible mid-flip', async ({ browser }) => {
   for (const viewport of [
     { name: 'desktop', width: 1280, height: 800 },
@@ -152,7 +180,7 @@ test('hexagram burst is visible mid-flip', async ({ browser }) => {
       deviceScaleFactor: 1,
     });
     const page = await context.newPage();
-    await waitForCard(page);
+    await waitForCard(page, { reduced: false });
     await page.evaluate(() => window.__card.previewFlip(0.42));
     await page.waitForFunction(() => window.__card.burst > 0.3, undefined, { timeout: 10_000 });
     await page.screenshot({ path: path.join(ARTIFACTS, `midflip-${viewport.name}.png`) });
