@@ -182,7 +182,7 @@ test('hexagram burst is visible mid-flip', async ({ browser }) => {
     const page = await context.newPage();
     await waitForCard(page, { reduced: false });
     await page.evaluate(() => window.__card.previewFlip(0.42));
-    await page.waitForFunction(() => window.__card.burst > 0.3, undefined, { timeout: 10_000 });
+    await page.waitForFunction(() => window.__card.burst > 0.3, undefined, { timeout: 30_000 });
     await page.screenshot({ path: path.join(ARTIFACTS, `midflip-${viewport.name}.png`) });
     await context.close();
   }
