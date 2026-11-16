@@ -2,7 +2,7 @@
 
 An interactive, static viewer for Letian Deng's floating card island: a two-sided 3D business card you can turn over in the browser.
 
-The front is a lunar card. The name and the lines under it are warm white, with a thin dark shadow so they stay readable on the grey ground. A burning sun and the planets Earth, the Moon, Mars, Jupiter and Saturn float in the space around the card. The portrait sits in a clear glass panel. The back is the forest face, with drifting clouds, butterflies, and fireflies around the contact details, which sit on a frosted plate. Drag orbits freely in either direction, scroll or pinch to zoom, and press the star or double-tap to turn to the other face by the shortest way. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
+The front is a lunar card. The name and the lines under it are warm white, with a thin dark shadow so they stay readable on the grey ground. A burning sun, Jupiter and Saturn float in the space around the card. Earth, the Moon and Mars are set into the lunar ground. The portrait sits in a clear glass panel. The back is the forest face, with drifting clouds, butterflies, and fireflies around the contact details, which sit on a frosted plate. Drag orbits freely in either direction, scroll or pinch to zoom, and press the star or double-tap to turn to the other face by the shortest way. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
 
 Live site (after GitHub Pages is enabled): <https://dengletian702-rgb.github.io/letian-card-3d/>
 
