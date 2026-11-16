@@ -13,7 +13,8 @@ const MODEL_URL = `${import.meta.env.BASE_URL}card-island.glb`;
 const FOV = 27;
 const FIT_MARGIN = 1.075;
 const IDLE_MS = 2600;
-const FLIP_MS = 900;
+const FLIP_MS = 860;
+const BURST_MS = 780;
 const AUTO_ROTATE_SPEED = 0.7;
 
 const canvas = document.getElementById('view');
@@ -33,7 +34,9 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.AgXToneMapping;
-renderer.toneMappingExposure = 1.02;
+renderer.toneMappingExposure = 1;
+// Default clear is white. Any stray clear during the flip must stay midnight, not flash.
+renderer.setClearColor(0x05060a, 1);
 
 const gl = renderer.getContext();
 const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
@@ -62,39 +65,41 @@ controls.minPolarAngle = Math.PI * 0.22;
 controls.maxPolarAngle = Math.PI * 0.78;
 controls.target.set(0, 0, 0);
 
-const hemi = new THREE.HemisphereLight(0xf4e9ff, 0xf3e2d4, 0.7);
+const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 1.05);
 scene.add(hemi);
 
-// Warm key from the upper left. The card yaws, so this light stays on
-// whichever face is turned toward the camera.
-const key = new THREE.DirectionalLight(0xfff3e6, 2.05);
-key.position.set(-6.2, 7.8, 7.2);
+// Warm key from the upper left. Intensities stay constant through the flip.
+const key = new THREE.DirectionalLight(0xfff4e8, 2.85);
+key.position.set(-6.2, 8.2, 7.4);
 scene.add(key);
 
-const fill = new THREE.DirectionalLight(0xe6dcff, 0.62);
-fill.position.set(6.2, 2.1, 5.4);
+const fill = new THREE.DirectionalLight(0xcfd8ff, 1.05);
+fill.position.set(6.4, 2.4, 5.6);
 scene.add(fill);
 
-const rim = new THREE.DirectionalLight(0xfff6ec, 0.7);
-rim.position.set(1.2, 4.4, -7.5);
+const rim = new THREE.DirectionalLight(0xfff1dc, 0.95);
+rim.position.set(1.2, 4.6, -7.6);
 scene.add(rim);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.4;
+scene.environmentIntensity = 0.55;
 pmrem.dispose();
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-// Threshold stays above 1 so unlit white (photo, QR) stays sharp.
-// Emissive bulbs, crystals and name-dots sit above that and pick up the halo.
-const bloomStrength = coarseQuery.matches ? 0.28 : 0.4;
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), bloomStrength, 0.48, 1.05);
+// Threshold stays above 1 so the unlit photo and QR never enter the bloom buffer.
+const bloomStrength = coarseQuery.matches ? 0.28 : 0.34;
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), bloomStrength, 0.36, 1.4);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
 const pivot = new THREE.Group();
 scene.add(pivot);
+
+const burstScene = new THREE.Scene();
+const burst = createBurst();
+burstScene.add(burst.group);
 
 const state = {
   ready: false,
@@ -104,6 +109,8 @@ const state = {
   flipTo: 0,
   flipStart: 0,
   frames: 0,
+  scrub: null,
+  burst: 0,
   error: null,
   interacted: false,
   textures: { photo: null, qr: null },
@@ -155,6 +162,7 @@ function flip() {
   state.flipping = true;
   controls.autoRotate = false;
   flipButton.setAttribute('aria-pressed', state.face === 'back' ? 'true' : 'false');
+  startBurst();
 }
 
 function easeInOut(t) {
@@ -298,9 +306,12 @@ resize();
 
 function animate() {
   requestAnimationFrame(animate);
-  if (state.flipping) {
+  const now = performance.now();
+  if (state.scrub !== null) {
+    poseAt(state.scrub, false);
+  } else if (state.flipping) {
     const duration = reduceMotion ? 1 : FLIP_MS;
-    const t = Math.min(1, (performance.now() - state.flipStart) / duration);
+    const t = Math.min(1, (now - state.flipStart) / duration);
     const k = reduceMotion ? 1 : easeInOut(t);
     pivot.rotation.y = state.flipFrom + (state.flipTo - state.flipFrom) * k;
     if (t >= 1) {
@@ -309,8 +320,18 @@ function animate() {
       scheduleAutoRotate();
     }
   }
+  updateBurst(now);
   controls.update();
   composer.render();
+  if (burst.group.visible) {
+    // Draw the star after bloom so it cannot blow the whole frame through the bloom buffer.
+    renderer.setRenderTarget(null);
+    const previousClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(burstScene, camera);
+    renderer.autoClear = previousClear;
+  }
   state.frames += 1;
 }
 
@@ -332,6 +353,12 @@ window.__card = {
   get frames() {
     return state.frames;
   },
+  get burst() {
+    return state.burst;
+  },
+  get yaw() {
+    return pivot.rotation.y;
+  },
   get error() {
     return state.error;
   },
@@ -351,6 +378,19 @@ window.__card = {
     return rendererName;
   },
   flip,
+  /**
+   * Hold the flip at progress u (0 front, 1 back) for screenshots.
+   * Pass null to release the scrub.
+   */
+  previewFlip(u) {
+    if (u === null || u === undefined) {
+      state.scrub = null;
+      hideBurst();
+      return;
+    }
+    state.scrub = Math.min(1, Math.max(0, u));
+    controls.autoRotate = false;
+  },
   /** Move the camera along its current view ray. Used by the headless check. */
   zoomTo(distance) {
     const offset = camera.position.clone().sub(controls.target);
@@ -366,30 +406,208 @@ function makeBackground() {
   c.width = 1024;
   c.height = 1024;
   const g = c.getContext('2d');
-  const gradient = g.createLinearGradient(0, 0, 900, 1024);
-  gradient.addColorStop(0, '#e4cff8');
-  gradient.addColorStop(0.34, '#f4e1f4');
-  gradient.addColorStop(0.62, '#f8efe4');
-  gradient.addColorStop(1, '#fff7ef');
-  g.fillStyle = gradient;
+  g.fillStyle = '#05060a';
   g.fillRect(0, 0, 1024, 1024);
-  const wash = g.createRadialGradient(800, 160, 20, 800, 180, 520);
-  wash.addColorStop(0, 'rgba(255, 226, 240, 0.7)');
-  wash.addColorStop(1, 'rgba(255, 226, 240, 0)');
-  g.fillStyle = wash;
+  const navy = g.createRadialGradient(512, 460, 80, 512, 512, 720);
+  navy.addColorStop(0, 'rgba(18, 28, 52, 0.55)');
+  navy.addColorStop(0.45, 'rgba(8, 12, 24, 0.2)');
+  navy.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  g.fillStyle = navy;
   g.fillRect(0, 0, 1024, 1024);
-  const image = g.getImageData(0, 0, 1024, 1024);
-  const data = image.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const n = (Math.random() - 0.5) * 2.5;
-    data[i] = clampByte(data[i] + n);
-    data[i + 1] = clampByte(data[i + 1] + n);
-    data[i + 2] = clampByte(data[i + 2] + n);
+  const vignette = g.createRadialGradient(512, 512, 260, 512, 512, 760);
+  vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.72)');
+  g.fillStyle = vignette;
+  g.fillRect(0, 0, 1024, 1024);
+  for (let i = 0; i < 70; i += 1) {
+    const x = Math.random() * 1024;
+    const y = Math.random() * 1024;
+    const alpha = 0.12 + Math.random() * 0.38;
+    const radius = Math.random() < 0.88 ? 0.7 : 1.15;
+    g.fillStyle = `rgba(214, 222, 242, ${alpha})`;
+    g.beginPath();
+    g.arc(x, y, radius, 0, Math.PI * 2);
+    g.fill();
   }
-  g.putImageData(image, 0, 0);
   const texture = new THREE.CanvasTexture(c);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
+}
+
+function createBurst() {
+  const hexMaterial = new THREE.SpriteMaterial({
+    map: makeHexagramTexture(),
+    color: 0xd7e4ff,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const hex = new THREE.Sprite(hexMaterial);
+  hex.center.set(0.5, 0.5);
+  hex.scale.set(0.01, 0.01, 1);
+  hex.visible = false;
+  hex.renderOrder = 10;
+
+  const sparkleMap = makeSparkleTexture();
+  const sparkles = [];
+  const group = new THREE.Group();
+  group.visible = false;
+  group.add(hex);
+  for (let i = 0; i < 16; i += 1) {
+    const material = new THREE.SpriteMaterial({
+      map: sparkleMap,
+      color: i % 3 === 0 ? 0xffe1f2 : 0xe7f0ff,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.visible = false;
+    sprite.renderOrder = 11;
+    group.add(sprite);
+    sparkles.push({
+      sprite,
+      angle: (i / 16) * Math.PI * 2 + (i % 2) * 0.18,
+      speed: 2.4 + (i % 5) * 0.55,
+      size: 0.16 + (i % 4) * 0.07,
+      spin: (i % 2 === 0 ? 1 : -1) * (1.2 + (i % 3) * 0.4),
+    });
+  }
+  return { group, hex, sparkles, playing: false, start: 0, reduced: false };
+}
+
+function makeHexagramTexture() {
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = size * 0.3;
+  const draw = (offset, width, color, blur) => {
+    g.save();
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    g.strokeStyle = color;
+    g.lineWidth = width;
+    g.shadowColor = color;
+    g.shadowBlur = blur;
+    for (const turn of [0, Math.PI]) {
+      g.beginPath();
+      for (let i = 0; i < 3; i += 1) {
+        const angle = offset + turn + (i * 2 * Math.PI) / 3;
+        const x = cx + radius * Math.cos(angle);
+        const y = cy + radius * Math.sin(angle);
+        if (i === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.closePath();
+      g.stroke();
+    }
+    g.restore();
+  };
+  draw(-Math.PI / 2, 34, 'rgba(150, 186, 255, 0.28)', 48);
+  draw(-Math.PI / 2, 14, 'rgba(214, 228, 255, 0.7)', 18);
+  draw(-Math.PI / 2, 4, 'rgba(255, 255, 255, 0.95)', 0);
+  const texture = new THREE.CanvasTexture(c);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeSparkleTexture() {
+  const size = 64;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  const glow = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  glow.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  glow.addColorStop(0.35, 'rgba(214, 228, 255, 0.7)');
+  glow.addColorStop(1, 'rgba(214, 228, 255, 0)');
+  g.fillStyle = glow;
+  g.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(c);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function startBurst() {
+  burst.playing = true;
+  burst.start = performance.now();
+  burst.reduced = reduceMotion;
+  burst.group.visible = true;
+}
+
+function hideBurst() {
+  burst.playing = false;
+  burst.group.visible = false;
+  burst.hex.visible = false;
+  burst.hex.material.opacity = 0;
+  for (const spark of burst.sparkles) {
+    spark.sprite.visible = false;
+    spark.sprite.material.opacity = 0;
+  }
+  state.burst = 0;
+}
+
+function layoutBurst(t, reduced) {
+  const clamped = Math.min(1, Math.max(0, t));
+  burst.group.visible = true;
+  burst.hex.visible = true;
+  if (reduced) {
+    burst.hex.material.blending = THREE.NormalBlending;
+    burst.hex.material.rotation = 0;
+    burst.hex.scale.set(2.2, 2.2, 1);
+    burst.hex.material.opacity = Math.sin(Math.PI * clamped) * 0.45;
+    for (const spark of burst.sparkles) spark.sprite.visible = false;
+    state.burst = clamped;
+    return;
+  }
+  burst.hex.material.blending = THREE.AdditiveBlending;
+  const grow = 1 - Math.pow(1 - Math.min(1, clamped / 0.68), 3);
+  const scale = 0.8 + grow * 6.6;
+  burst.hex.scale.set(scale, scale, 1);
+  burst.hex.material.rotation = clamped * Math.PI * 1.15;
+  const fadeIn = Math.min(1, clamped / 0.14);
+  const fadeOut = clamped < 0.46 ? 1 : 1 - (clamped - 0.46) / 0.54;
+  burst.hex.material.opacity = Math.max(0, fadeIn * fadeOut) * 0.72;
+  for (const spark of burst.sparkles) {
+    const dist = clamped * spark.speed;
+    spark.sprite.visible = true;
+    spark.sprite.position.set(Math.cos(spark.angle) * dist, Math.sin(spark.angle) * dist, 0.15);
+    const sparkScale = spark.size * (1.15 - clamped * 0.45);
+    spark.sprite.scale.set(sparkScale, sparkScale, 1);
+    spark.sprite.material.opacity = Math.max(0, fadeIn * fadeOut) * 0.7;
+    spark.sprite.material.rotation = clamped * spark.spin;
+  }
+  state.burst = clamped;
+}
+
+function poseAt(u, reduced) {
+  const clamped = Math.min(1, Math.max(0, u));
+  const k = reduced ? clamped : easeInOut(clamped);
+  pivot.rotation.y = k * Math.PI;
+  const burstT = reduced ? clamped : clamped * (FLIP_MS / BURST_MS);
+  if (clamped <= 0 || clamped >= 1 || burstT >= 1) hideBurst();
+  else layoutBurst(burstT, reduced);
+}
+
+function updateBurst(now) {
+  if (state.scrub !== null || !burst.playing) return;
+  const duration = burst.reduced ? 280 : BURST_MS;
+  const t = Math.min(1, (now - burst.start) / duration);
+  if (t >= 1) {
+    hideBurst();
+    return;
+  }
+  layoutBurst(t, burst.reduced);
 }
 
 function clampByte(value) {

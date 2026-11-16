@@ -29,6 +29,9 @@ test('loads, drags, zooms, and flips', async ({ page }) => {
     'href',
     'https://github.com/dengletian702-rgb/letian-card-3d',
   );
+  await expect(page.locator('#flip')).toHaveAttribute('aria-label', 'Flip card');
+  await expect(page.locator('#flip')).toHaveText('');
+  await expect(page.locator('#hint')).not.toContainText(/翻转|flip/i);
 
   const textures = await page.evaluate(() => window.__card.textures);
   expect(textures.photo?.[0] || 0).toBeGreaterThan(800);
@@ -77,7 +80,7 @@ test('loads, drags, zooms, and flips', async ({ page }) => {
   );
   await page.evaluate(() => window.__card.flip());
   await page.waitForFunction(
-    () => window.__card.face === 'back' && !window.__card.flipping && window.__card.frames > 4,
+    () => window.__card.face === 'back' && !window.__card.flipping && window.__card.burst === 0,
     undefined,
     { timeout: 15_000 },
   );
@@ -122,5 +125,37 @@ test('mobile viewport shows the front face', async ({ browser }) => {
     before,
     { timeout: 10_000 },
   );
+  await page.reload();
+  await page.waitForFunction(
+    () => window.__card && window.__card.ready && window.__card.frames > 2,
+    undefined,
+    { timeout: 90_000 },
+  );
+  await page.evaluate(() => window.__card.flip());
+  await page.waitForFunction(
+    () => window.__card.face === 'back' && !window.__card.flipping && window.__card.burst === 0,
+    undefined,
+    { timeout: 15_000 },
+  );
+  await page.screenshot({ path: path.join(ARTIFACTS, 'back-mobile.png') });
   await context.close();
+});
+
+test('hexagram burst is visible mid-flip', async ({ browser }) => {
+  for (const viewport of [
+    { name: 'desktop', width: 1280, height: 800 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      reducedMotion: 'no-preference',
+      deviceScaleFactor: 1,
+    });
+    const page = await context.newPage();
+    await waitForCard(page);
+    await page.evaluate(() => window.__card.previewFlip(0.42));
+    await page.waitForFunction(() => window.__card.burst > 0.3, undefined, { timeout: 10_000 });
+    await page.screenshot({ path: path.join(ARTIFACTS, `midflip-${viewport.name}.png`) });
+    await context.close();
+  }
 });
