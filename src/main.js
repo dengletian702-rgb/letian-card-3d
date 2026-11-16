@@ -33,6 +33,7 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
 });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.localClippingEnabled = true;
 renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1;
 // Default clear is white. Any stray clear during the flip must stay midnight, not flash.
@@ -323,6 +324,27 @@ function hideFrontDecor(name) {
   );
 }
 
+function tuckBackInside() {
+  const planes = [
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 2.22),
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), 2.22),
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), 4.18),
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), 4.18),
+  ];
+  const applyPlanes = (material) => {
+    if (!material) return material;
+    const next = material.clone();
+    next.clippingPlanes = planes;
+    next.clipShadows = true;
+    return next;
+  };
+  pivot.traverse((object) => {
+    if (!object.isMesh || !/^(conifer|beech|alpine-peak)/.test(object.name || '')) return;
+    if (Array.isArray(object.material)) object.material = object.material.map(applyPlanes);
+    else object.material = applyPlanes(object.material);
+  });
+}
+
 function isSealScript(name) {
   return name.startsWith('text-乐');
 }
@@ -392,6 +414,7 @@ async function dressCard(root) {
   if (grass) grass.visible = false;
   const faceA = root.getObjectByName('faceA-alien');
   const faceB = root.getObjectByName('faceB-forest');
+  tuckBackInside();
   const terrain = await buildLunarTerrain(faceA);
   addBackPlates(faceB);
   addTypeShadows(root);
@@ -741,9 +764,9 @@ const CARD_HALF_H = CARD_H / 2;
 const RELIEF_AMP = 0.82;
 const PLATEAU_LEVEL = 0.56;
 const EMBEDDED = [
-  { key: 'earth', x: 0.55, z: 2.46, radius: 0.32, bury: 0.3, crater: 0.56, depth: 0.44, rim: 0.1 },
-  { key: 'mars', x: 4.18, z: 0.55, radius: 0.26, bury: 0.24, crater: 0.48, depth: 0.34, rim: 0.09 },
-  { key: 'moon', x: 3.22, z: -2.36, radius: 0.2, bury: 0.16, crater: 0.38, depth: 0.24, rim: 0.07 },
+  { key: 'earth', x: 0.15, z: 1.62, radius: 0.5, bury: 0.42, crater: 0.78, depth: 0.68, rim: 0.14 },
+  { key: 'mars', x: 2.55, z: 2.06, radius: 0.4, bury: 0.4, crater: 0.64, depth: 0.54, rim: 0.12 },
+  { key: 'moon', x: 0.05, z: -1.78, radius: 0.36, bury: 0.38, crater: 0.58, depth: 0.46, rim: 0.11 },
 ];
 
 function embedDelta(x, z) {
