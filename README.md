@@ -2,7 +2,7 @@
 
 An interactive, static viewer for Letian Deng's floating card island: a two-sided 3D business card you can turn over in the browser.
 
-The front is a lunar card with gilded lettering, a small sun, and a ringed planet. The back is the forest face, with drifting clouds, butterflies, and fireflies around the contact details. Drag orbits freely in either direction, scroll or pinch to zoom, and press the star or double-tap to turn to the other face by the shortest way. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
+The front is a lunar card. The name and the lines under it are warm white, with a thin dark shadow so they stay readable on the grey ground. A small sun and a ringed planet sit part-way into the regolith, each in an impact crater, with a few stones lodged in the gravel. The portrait keeps a thin gold frame and a white mat. The back is the forest face, with drifting clouds, butterflies, and fireflies around the contact details, which sit on a dark charcoal plate. Drag orbits freely in either direction, scroll or pinch to zoom, and press the star or double-tap to turn to the other face by the shortest way. When the pointer is idle the card slowly turns; that motion is skipped when the system asks for reduced motion.
 
 Live site (after GitHub Pages is enabled): <https://dengletian702-rgb.github.io/letian-card-3d/>
 
@@ -43,13 +43,13 @@ The next push to `main` (or a manual run of the "Deploy GitHub Pages" workflow) 
 
 ## Lunar surface
 
-The front of the card is a displaced mesh using a crop of the [NASA Scientific Visualization Studio CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) (SVS 4720). The colour is LROC WAC imagery (`lroc_color_poles_4k.tif`) and the height is LOLA/LDEM elevation (`ldem_4_uint.tif`), both public domain. The crop is desaturated to warm charcoal grey. Crater rims and slopes come from that elevation, with a soft detail normal on top.
+The front of the card is a displaced mesh using a crop of the [NASA Scientific Visualization Studio CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) (SVS 4720). The colour is LROC WAC imagery (`lroc_color_poles_4k.tif`) and the height is LOLA/LDEM elevation (`ldem_4_uint.tif`), both public domain. The crop is desaturated to warm charcoal grey. Crater rims and slopes come from that elevation, with a soft detail normal on top. The sun, the ringed planet, and the loose stones are set into extra craters carved in that same surface, and the sun casts a short warm pool of light on the nearby ground. The lettering and the portrait sit on flat plateaus so the relief does not cut through them.
 
 ## Model
 
 The island was made in Blender and exported to glTF. In the viewer the origin is the centre of the card: the front (name and photo) faces +Z, and the back (forest, contacts, WhatsApp QR) faces −Z. Flipping rotates the card 180° about Y, the same axis as a horizontal drag.
 
-`public/card-island.glb` is that export after web compression. Geometry uses [meshopt](https://github.com/zeux/meshopt) and repeated trees are GPU instances. Baked textures and the portrait are WebP. The QR stays a lossless PNG and is sampled with nearest-neighbour filtering so it can be scanned from the screen. The portrait and the QR are unlit, so the lights do not tint them. Emissive plants and lettering go through a light bloom pass.
+`public/card-island.glb` is that export after web compression. Geometry uses [meshopt](https://github.com/zeux/meshopt) and repeated trees are GPU instances. Baked textures and the portrait are WebP. The QR stays a lossless PNG and is sampled with nearest-neighbour filtering so it can be scanned from the screen. The portrait and the QR are unlit, so the lights do not tint them. The type is warm white (`#F4F2EC`) and is not emissive, so the bloom pass does not glow the letters. Bloom is reserved for the sun and the small lights on the forest face.
 
 `og.jpg` is a straight-on render of the front face. It is the social preview image and the image shown while the model loads.
 
