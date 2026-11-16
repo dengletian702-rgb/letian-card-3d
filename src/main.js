@@ -37,6 +37,8 @@ renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1;
 // Default clear is white. Any stray clear during the flip must stay midnight, not flash.
 renderer.setClearColor(0x05060a, 1);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const gl = renderer.getContext();
 const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
@@ -68,15 +70,26 @@ controls.minPolarAngle = Math.PI / 2 - 0.62;
 controls.maxPolarAngle = Math.PI / 2 + 0.48;
 controls.target.set(0, 0, 0);
 
-const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 0.78);
+const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 0.55);
 scene.add(hemi);
 
 // Warm key from the upper left. Intensities stay constant through the flip.
-const key = new THREE.DirectionalLight(0xfff4e8, 2.05);
-key.position.set(-6.2, 8.2, 7.4);
+const key = new THREE.DirectionalLight(0xfff1e0, 2.55);
+key.position.set(-8.4, 2.6, 4.8);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 1;
+key.shadow.camera.far = 26;
+key.shadow.camera.left = -8;
+key.shadow.camera.right = 8;
+key.shadow.camera.top = 6;
+key.shadow.camera.bottom = -6;
+key.shadow.bias = -0.0012;
+key.shadow.normalBias = 0.025;
 scene.add(key);
+scene.add(key.target);
 
-const fill = new THREE.DirectionalLight(0xcfd8ff, 0.72);
+const fill = new THREE.DirectionalLight(0xd5dcf0, 0.42);
 fill.position.set(6.4, 2.4, 5.6);
 scene.add(fill);
 
@@ -304,30 +317,40 @@ function hideFrontDecor(name) {
     name.startsWith('spore') ||
     name.startsWith('glow') ||
     name.startsWith('crystal') ||
-    name.startsWith('name-flower') ||
     name.startsWith('grass-glow')
   );
 }
 
-function dressCard(root) {
+async function dressCard(root) {
   const gold = new THREE.MeshStandardMaterial({
-    color: 0xb08a3a,
-    metalness: 0.7,
-    roughness: 0.4,
-    emissive: 0x3a280c,
-    emissiveIntensity: 0.08,
-    envMapIntensity: 0.55,
+    color: 0xc9a24b,
+    metalness: 0.86,
+    roughness: 0.3,
+    emissive: 0x2a1c08,
+    emissiveIntensity: 0.05,
+    envMapIntensity: 1.15,
     side: THREE.DoubleSide,
   });
   root.traverse((object) => {
     const name = object.name || '';
     if (hideFrontDecor(name)) object.visible = false;
-    if (object.isMesh && (name.startsWith('text-') || name.startsWith('txt'))) object.material = gold;
+    if (object.isMesh && (name.startsWith('text-') || name.startsWith('txt') || name.startsWith('name-flower'))) {
+      object.material = gold;
+      object.visible = true;
+    }
+    if (name.startsWith('photo-gold')) recolorTrim(object, 0x8c6a2a, 0.78, 0.34);
+    else if (name.startsWith('photo-bezel') || name === 'slab' || name.startsWith('slab')) {
+      recolorTrim(object, 0x2a2927, 0.22, 0.68);
+    }
   });
-  applyRegolith(root.getObjectByName('alien-grass'));
+  const grass = root.getObjectByName('alien-grass');
+  if (grass) grass.visible = false;
+  const terrain = await buildLunarTerrain(root.getObjectByName('faceA-alien'));
+  addBackPlates(root.getObjectByName('faceB-forest'));
   const faceA = root.getObjectByName('faceA-alien');
   const faceB = root.getObjectByName('faceB-forest');
   const front = buildFrontSky(faceA);
+  void terrain;
   const forest = buildForestLife(faceB);
   return {
     update(now, reduced) {
@@ -338,128 +361,219 @@ function dressCard(root) {
   };
 }
 
-function applyRegolith(mesh) {
-  if (!mesh || !mesh.material) return;
-  const maps = makeRegolithMaps();
-  const material = mesh.material;
-  material.map = maps.color;
-  material.normalMap = maps.normal;
-  material.normalScale?.set(0.85, 0.85);
-  material.color?.set(0xffffff);
-  material.roughness = 0.92;
-  material.metalness = 0.02;
-  if (material.emissive) material.emissive.set(0x000000);
-  material.emissiveIntensity = 0;
-  material.emissiveMap = null;
-  material.needsUpdate = true;
-  const geometry = mesh.geometry;
-  const position = geometry?.getAttribute('position');
-  if (position && !geometry.getAttribute('uv')) {
-    const uv = new Float32Array(position.count * 2);
-    for (let i = 0; i < position.count; i += 1) {
-      uv[i * 2] = (position.getX(i) + 4.6) / 9.2;
-      uv[i * 2 + 1] = (position.getZ(i) + 2.8) / 5.6;
-    }
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  }
-  try {
-    if (geometry && geometry.getAttribute('uv') && geometry.getAttribute('normal') && geometry.index) {
-      geometry.computeTangents();
-    }
-  } catch {
-    material.normalMap = null;
+function recolorTrim(object, color, metalness, roughness) {
+  const materials = Array.isArray(object.material) ? object.material : [object.material];
+  for (const material of materials) {
+    if (!material || !material.color) continue;
+    material.map = null;
+    material.emissiveMap = null;
+    material.color.set(color);
+    if (material.emissive) material.emissive.set(0x000000);
+    material.emissiveIntensity = 0;
+    material.metalness = metalness;
+    material.roughness = roughness;
+    material.needsUpdate = true;
   }
 }
 
-function makeRegolithMaps() {
-  const size = 512;
-  const height = new Float32Array(size * size);
-  const rand = mulberry32(0x51a7);
-  for (let i = 0; i < height.length; i += 1) height[i] = rand() * 0.35;
-  for (let c = 0; c < 90; c += 1) {
-    const cx = Math.floor(rand() * size);
-    const cy = Math.floor(rand() * size);
-    const radius = 3 + rand() * (c < 10 ? 46 : 12);
-    const depth = 0.25 + rand() * 0.55;
-    for (let y = Math.max(0, cy - radius); y < Math.min(size, cy + radius); y += 1) {
-      for (let x = Math.max(0, cx - radius); x < Math.min(size, cx + radius); x += 1) {
-        const dx = (x - cx) / radius;
-        const dy = (y - cy) / radius;
-        const d = dx * dx + dy * dy;
-        if (d < 1) {
-          const bowl = (1 - d) * depth;
-          const rim = d > 0.72 && d < 1 ? (1 - Math.abs(d - 0.86) / 0.14) * 0.18 : 0;
-          height[y * size + x] += rim - bowl;
-        }
-      }
+function addBackPlates(faceB) {
+  if (!faceB) return;
+  const texts = [];
+  faceB.updateWorldMatrix(true, true);
+  faceB.traverse((object) => {
+    if (!object.isMesh) return;
+    const name = object.name || '';
+    if (!name.startsWith('text-') && !name.startsWith('txt')) return;
+    const box = new THREE.Box3().setFromObject(object);
+    const center = box.getCenter(new THREE.Vector3());
+    faceB.worldToLocal(center);
+    texts.push({ name, center, size: box.getSize(new THREE.Vector3()) });
+  });
+  const column = texts.filter((item) => item.center.x < -1.15 && !/whatsapp/i.test(item.name));
+  if (column.length) {
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const item of column) {
+      min.min(item.center);
+      max.max(item.center);
     }
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(max.x - min.x + 0.85, max.z - min.z + 0.55),
+      new THREE.MeshStandardMaterial({
+        color: 0x14200f,
+        roughness: 1,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.46,
+        depthWrite: false,
+      }),
+    );
+    plate.rotation.x = -Math.PI / 2;
+    plate.position.set((min.x + max.x) / 2, 0.012, (min.z + max.z) / 2);
+    faceB.add(plate);
   }
-  const color = document.createElement('canvas');
-  color.width = size;
-  color.height = size;
-  const cg = color.getContext('2d');
-  const image = cg.createImageData(size, size);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const h = height[y * size + x];
-      const n = rand();
-      const shade = 78 + h * 150 + n * 28;
-      const i = (y * size + x) * 4;
-      image.data[i] = shade + 6;
-      image.data[i + 1] = shade + 4;
-      image.data[i + 2] = shade + 1;
-      image.data[i + 3] = 255;
-    }
+  const whats = texts.find((item) => /whatsapp/i.test(item.name));
+  if (whats) {
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.35, 0.42),
+      new THREE.MeshStandardMaterial({
+        color: 0x14200f,
+        roughness: 1,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+      }),
+    );
+    plate.rotation.x = -Math.PI / 2;
+    plate.position.set(whats.center.x, 0.012, whats.center.z);
+    faceB.add(plate);
   }
-  cg.putImageData(image, 0, 0);
-  const colorTex = new THREE.CanvasTexture(color);
-  colorTex.colorSpace = THREE.SRGBColorSpace;
-  colorTex.wrapS = colorTex.wrapT = THREE.RepeatWrapping;
-  colorTex.repeat.set(2, 1.4);
+}
 
-  const normal = document.createElement('canvas');
-  normal.width = size;
-  normal.height = size;
-  const ng = normal.getContext('2d');
-  const nimage = ng.createImageData(size, size);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const hL = height[y * size + ((x + size - 1) % size)];
-      const hR = height[y * size + ((x + 1) % size)];
-      const hD = height[((y + size - 1) % size) * size + x];
-      const hU = height[((y + 1) % size) * size + x];
-      const dx = (hL - hR) * 2.2;
-      const dy = (hD - hU) * 2.2;
-      const i = (y * size + x) * 4;
-      nimage.data[i] = (dx * 0.5 + 0.5) * 255;
-      nimage.data[i + 1] = (dy * 0.5 + 0.5) * 255;
-      nimage.data[i + 2] = 255;
-      nimage.data[i + 3] = 255;
-    }
+async function buildLunarTerrain(faceA) {
+  const base = import.meta.env.BASE_URL;
+  const [albedoImg, heightImg, normalImg, detailImg] = await Promise.all([
+    loadImage(`${base}moon/albedo.jpg`),
+    loadImage(`${base}moon/height.png`),
+    loadImage(`${base}moon/normal.jpg`),
+    loadImage(`${base}moon/detail-normal.jpg`),
+  ]);
+  const aniso = renderer.capabilities.getMaxAnisotropy();
+  const albedo = new THREE.CanvasTexture(shadeTextPlateau(albedoImg));
+  albedo.colorSpace = THREE.SRGBColorSpace;
+  albedo.anisotropy = aniso;
+  albedo.generateMipmaps = true;
+  const normal = new THREE.Texture(normalImg);
+  normal.colorSpace = THREE.LinearSRGBColorSpace;
+  normal.anisotropy = aniso;
+  normal.needsUpdate = true;
+  const detail = new THREE.Texture(detailImg);
+  detail.colorSpace = THREE.LinearSRGBColorSpace;
+  detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+  detail.repeat.set(5, 3);
+  detail.anisotropy = aniso;
+  detail.needsUpdate = true;
+
+  const sample = document.createElement('canvas');
+  sample.width = heightImg.width;
+  sample.height = heightImg.height;
+  const sg = sample.getContext('2d', { willReadFrequently: true });
+  sg.drawImage(heightImg, 0, 0);
+  const pixels = sg.getImageData(0, 0, sample.width, sample.height).data;
+  const segX = 200;
+  const segZ = 120;
+  const geo = new THREE.PlaneGeometry(9.05, 5.42, segX, segZ);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  const raw = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i += 1) {
+    const u = uv.getX(i);
+    const v = uv.getY(i);
+    const ix = Math.min(sample.width - 1, Math.max(0, Math.floor(u * (sample.width - 1))));
+    const iy = Math.min(sample.height - 1, Math.max(0, Math.floor((1 - v) * (sample.height - 1))));
+    raw[i] = pixels[(iy * sample.width + ix) * 4] / 255;
   }
-  ng.putImageData(nimage, 0, 0);
-  const normalTex = new THREE.CanvasTexture(normal);
-  normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping;
-  normalTex.repeat.set(2, 1.4);
-  return { color: colorTex, normal: normalTex };
+  const amp = 0.22;
+  const plateau = 0.62 * amp;
+  for (let i = 0; i < pos.count; i += 1) {
+    const u = uv.getX(i);
+    const v = uv.getY(i);
+    const mask = Math.max(
+      plateauMask(u, 0.02, 0.52, v, 0.05, 0.95, 0.08),
+      plateauMask(u, 0.54, 0.92, v, 0.16, 0.86, 0.06),
+    );
+    const h = (raw[i] * (1 - mask) + 0.62 * mask) * amp;
+    pos.setY(i, h);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  const material = new THREE.MeshStandardMaterial({
+    map: albedo,
+    normalMap: normal,
+    normalScale: new THREE.Vector2(1.15, 1.15),
+    bumpMap: detail,
+    bumpScale: 0.012,
+    roughness: 0.95,
+    metalness: 0,
+  });
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.position.y = 0.0;
+  mesh.name = 'lunar-terrain';
+  faceA.add(mesh);
+  liftFrontContent(faceA, plateau + 0.045);
+  return mesh;
+}
+
+function liftFrontContent(faceA, surface) {
+  faceA.traverse((object) => {
+    if (!object.isMesh || object.name === 'lunar-terrain') return;
+    const name = object.name || '';
+    if (name.startsWith('portrait')) object.position.y = surface + 0.08;
+    else if (name.startsWith('photo-gold')) object.position.y = surface + 0.05;
+    else if (name.startsWith('photo-')) object.position.y = surface + 0.02;
+    else if (name.startsWith('text-') || name.startsWith('txt') || name.startsWith('name-flower') || name.startsWith('seal')) {
+      object.position.y = surface + 0.055;
+    }
+  });
+}
+
+function plateauMask(u, u0, u1, v, v0, v1, feather) {
+  const sx = smoothstep(u0, u0 + feather, u) * (1 - smoothstep(u1 - feather, u1, u));
+  const sy = smoothstep(v0, v0 + feather, v) * (1 - smoothstep(v1 - feather, v1, v));
+  return sx * sy;
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0 || 1)));
+  return t * t * (3 - 2 * t);
+}
+
+function shadeTextPlateau(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const g = canvas.getContext('2d');
+  g.drawImage(image, 0, 0);
+  g.globalCompositeOperation = 'multiply';
+  const fade = g.createLinearGradient(canvas.width * 0.02, 0, canvas.width * 0.55, 0);
+  fade.addColorStop(0, 'rgba(42, 40, 36, 0.34)');
+  fade.addColorStop(0.72, 'rgba(42, 40, 36, 0.22)');
+  fade.addColorStop(1, 'rgba(255, 255, 255, 1)');
+  g.fillStyle = fade;
+  g.fillRect(0, canvas.height * 0.05, canvas.width * 0.56, canvas.height * 0.9);
+  return canvas;
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load ${url}`));
+    image.src = url;
+  });
 }
 
 function buildFrontSky(faceA) {
   const group = new THREE.Group();
   faceA.add(group);
   const sun = buildSun();
-  sun.group.position.set(4.72, 1.72, -2.15);
+  sun.group.position.set(5.85, 1.95, -2.95);
   group.add(sun.group);
   const saturn = buildSaturn();
-  saturn.group.position.set(4.15, 1.22, 2.25);
+  saturn.group.position.set(5.15, 1.28, 2.55);
   group.add(saturn.group);
   const debris = buildDebris();
   group.add(debris.mesh);
   return {
     update(t, reduced) {
       const flick = reduced ? 0 : Math.sin(t * 2.6) * 0.06 + Math.sin(t * 6.1) * 0.03;
-      sun.material.emissiveIntensity = 1.35 + flick;
-      sun.corona.material.opacity = 0.42 + flick;
+      sun.material.emissiveIntensity = 1.85 + flick * 2;
+      sun.corona.material.opacity = 0.72 + flick;
+      sun.inner.material.opacity = 0.55 + flick * 0.5;
       if (!reduced) sun.paint(t);
       saturn.spin.rotation.y = reduced ? 0.4 : t * 0.32;
       debris.update(t, reduced);
@@ -470,27 +584,35 @@ function buildFrontSky(faceA) {
 function buildSun() {
   const painted = makeSunTexture();
   const material = new THREE.MeshStandardMaterial({
-    color: 0xfff1d2,
-    emissive: 0xffb15a,
+    color: 0x2a1208,
+    emissive: 0xffffff,
     emissiveMap: painted.tex,
-    emissiveIntensity: 1.05,
-    roughness: 0.55,
+    emissiveIntensity: 1.85,
+    roughness: 1,
     metalness: 0,
   });
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.46, 32, 24), material);
-  const coronaMap = makeGlowTexture('#ffd2a1');
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.32, 40, 28), material);
   const corona = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: coronaMap,
-    color: 0xffc48a,
+    map: makeGlowTexture('#ff6a1a'),
+    color: 0xff7a22,
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.72,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   }));
-  corona.scale.set(2.15, 2.15, 1);
+  corona.scale.set(1.7, 1.7, 1);
+  const inner = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeGlowTexture('#fff1c4'),
+    color: 0xffe7a8,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  inner.scale.set(1.05, 1.05, 1);
   const group = new THREE.Group();
-  group.add(mesh, corona);
-  return { group, material, corona, paint: painted.paint };
+  group.add(mesh, corona, inner);
+  return { group, material, corona, inner, paint: painted.paint };
 }
 
 function buildSaturn() {
@@ -744,12 +866,13 @@ function makeSunTexture() {
     const image = ctx.createImageData(size, size);
     for (let y = 0; y < size; y += 1) {
       for (let x = 0; x < size; x += 1) {
-        const n = hashNoise(x * 0.08 + time * 0.7, y * 0.08 - time * 0.45);
-        const heat = n;
+        const n = hashNoise(x * 0.11 + time * 0.85, y * 0.11 - time * 0.55);
+        const grain = hashNoise(x * 0.23 - time * 0.4, y * 0.19 + time * 0.3);
+        const heat = Math.min(1, n * 0.72 + grain * 0.45);
         const i = (y * size + x) * 4;
-        image.data[i] = 180 + heat * 75;
-        image.data[i + 1] = 40 + heat * 150;
-        image.data[i + 2] = 8 + heat * 30;
+        image.data[i] = 255;
+        image.data[i + 1] = 70 + heat * 185;
+        image.data[i + 2] = heat > 0.72 ? (heat - 0.72) * 700 : 12;
         image.data[i + 3] = 255;
       }
     }
@@ -827,11 +950,11 @@ function mulberry32(seed) {
   };
 }
 
-function onLoaded(gltf) {
+async function onLoaded(gltf) {
   const model = gltf.scene;
   pivot.add(model);
   tuneTextures(model);
-  decor = dressCard(model);
+  decor = await dressCard(model);
   resize();
   frameCamera();
   state.ready = true;

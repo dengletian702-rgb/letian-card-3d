@@ -41,6 +41,10 @@ The repository owner needs to turn Pages on once:
 
 The next push to `main` (or a manual run of the "Deploy GitHub Pages" workflow) publishes <https://dengletian702-rgb.github.io/letian-card-3d/>.
 
+## Lunar surface
+
+The front of the card is a displaced mesh using a crop of the [NASA Scientific Visualization Studio CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) (SVS 4720). The colour is LROC WAC imagery (`lroc_color_poles_4k.tif`) and the height is LOLA/LDEM elevation (`ldem_4_uint.tif`), both public domain. The crop is desaturated to warm charcoal grey. Crater rims and slopes come from that elevation, with a soft detail normal on top.
+
 ## Model
 
 The island was made in Blender and exported to glTF. In the viewer the origin is the centre of the card: the front (name and photo) faces +Z, and the back (forest, contacts, WhatsApp QR) faces −Z. Flipping rotates the card 180° about Y, the same axis as a horizontal drag.
