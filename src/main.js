@@ -563,7 +563,6 @@ async function dressCard(root) {
       glass.update(t, reduced);
     },
     setPresence(amount) {
-      front.setPresence(amount);
       forest.setPresence(1 - amount);
     },
   };
@@ -1106,7 +1105,9 @@ function buildFrontSky(faceA, maps, terrain) {
   const group = new THREE.Group();
   faceA.add(group);
   const sun = buildSun();
-  sun.group.position.set(5.15, -0.12, -3.05);
+  // Above the portrait's top-right corner, clear of the card, and out from the front
+  // so a flip carries it behind the card with that face.
+  sun.group.position.set(5.05, 2.15, -4.35);
   group.add(sun.group);
   const jupiter = makePlanet(maps.jupiter, 0.7, 0xcbb892, 0.22, 0.12, 1.05);
   const saturn = makeSaturn(maps.saturn, maps.ring);
@@ -1145,22 +1146,16 @@ function buildFrontSky(faceA, maps, terrain) {
     return planet;
   });
   const planets = [jupiter, saturn, ...embedded];
-  const floaters = [sun.group, jupiter.group, saturn.group];
-  const lamp = new THREE.PointLight(0xffc48a, 110, 0, 2);
+  // Short range so the sun lights the front it rides on. The card occludes the
+  // body from the back; this cutoff keeps the lamp from washing that face.
+  const lamp = new THREE.PointLight(0xffc48a, 70, 6.5, 2);
   sun.group.add(lamp);
-  let presence = 1;
   return {
-    setPresence(amount) {
-      presence = amount;
-    },
     update(t, reduced) {
       const flick = reduced ? 0 : Math.sin(t * 1.6) * 0.02 + Math.sin(t * 3.8) * 0.01;
-      const shown = presence > 0.03;
-      for (const body of floaters) body.visible = shown;
-      lamp.intensity = shown ? 110 * presence : 0;
-      sun.material.emissiveIntensity = (2.45 + flick) * presence;
-      sun.corona.material.opacity = (0.7 + flick) * presence;
-      sun.inner.material.opacity = (0.46 + flick * 0.25) * presence;
+      sun.material.emissiveIntensity = 2.45 + flick;
+      sun.corona.material.opacity = 0.7 + flick;
+      sun.inner.material.opacity = 0.46 + flick * 0.25;
       if (!reduced) sun.paint(t);
       const time = reduced ? 0.6 : t;
       for (const planet of planets) planet.spin.rotation.y = time * planet.rate;
@@ -1185,15 +1180,17 @@ function buildSun() {
     transparent: true,
     opacity: 0.7,
     depthWrite: false,
+    depthTest: true,
     blending: THREE.AdditiveBlending,
   }));
-  corona.scale.set(SUN_RADIUS * 2.85, SUN_RADIUS * 2.85, 1);
+  corona.scale.set(SUN_RADIUS * 2.15, SUN_RADIUS * 2.15, 1);
   const inner = new THREE.Sprite(new THREE.SpriteMaterial({
     map: makeCoronaTexture(),
     color: 0xffe7b0,
     transparent: true,
     opacity: 0.36,
     depthWrite: false,
+    depthTest: true,
     blending: THREE.AdditiveBlending,
   }));
   inner.scale.set(SUN_RADIUS * 1.55, SUN_RADIUS * 1.55, 1);
