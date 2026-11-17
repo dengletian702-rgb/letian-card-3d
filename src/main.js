@@ -21,7 +21,14 @@ const BURST_MS = 780;
 const AUTO_ROTATE_SPEED = 0.7;
 
 const recordDpr = Number(new URLSearchParams(window.location.search).get('dpr')) || 0;
-let cardLang = new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh';
+let cardLang = readCardLang();
+
+function readCardLang() {
+  const value = new URLSearchParams(window.location.search).get('lang');
+  if (value === 'en') return 'en';
+  if (value === 'zh') return 'zh';
+  return 'bi';
+}
 
 const canvas = document.getElementById('view');
 const loadingEl = document.getElementById('loading');
@@ -212,7 +219,7 @@ function easeInOut(t) {
 
 flipButton.addEventListener('click', flip);
 document.getElementById('lang')?.addEventListener('click', () => {
-  applyLanguage(cardLang === 'en' ? 'zh' : 'en', true);
+  applyLanguage(cardLang === 'en' ? 'bi' : 'en', true);
 });
 
 let lastTap = 0;
@@ -563,6 +570,7 @@ async function dressCard(root) {
   const faceB = root.getObjectByName('faceB-forest');
   tuckBackInside();
   const terrain = await buildLunarTerrain(faceA);
+  await document.fonts.load('600 64px "Noto Serif SC"');
   addEnglishCaptions(faceA, faceB);
   addBackPlates(faceB);
   addTypeShadows(root);
@@ -626,8 +634,9 @@ function addEnglishCaptions(faceA, faceB) {
   }
   packFrontStack(frontStack);
   clearContactHeadline(faceB);
-  addBackScrim(faceB);
   buildEnglishOnly(faceA, faceB);
+  buildChineseOnly(faceA, faceB);
+  addBackScrim(faceB);
   applyLanguage(cardLang, false);
 }
 
@@ -902,23 +911,26 @@ function splitCaption(text) {
   return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
 }
 
-function makeCaptionTexture(text, maxAspect, single) {
-  const fontPx = 256;
-  const font = `600 ${fontPx}px "Segoe UI", Helvetica, Arial, sans-serif`;
+function makeCaptionTexture(text, maxAspect, single, style = {}) {
+  const fontPx = style.size || 256;
+  const weight = style.weight || 600;
+  const family = style.family || '"Segoe UI", Helvetica, Arial, sans-serif';
+  const font = `${weight} ${fontPx}px ${family}`;
   const probe = document.createElement('canvas').getContext('2d');
   probe.font = font;
-  const singleWidth = probe.measureText(text).width;
-  const lines = !single && singleWidth / fontPx > maxAspect ? splitCaption(text) : [text];
+  const lines = text.includes('\n')
+    ? text.split('\n')
+    : (!single && probe.measureText(text).width / fontPx > maxAspect ? splitCaption(text) : [text]);
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  const padX = 28;
-  const lineBox = 300;
+  const padX = 32;
+  const lineBox = style.lineBox || 300;
   const widest = Math.max(...lines.map((line) => probe.measureText(line).width));
   canvas.width = Math.max(256, Math.ceil(widest + padX * 2));
   canvas.height = lineBox * lines.length;
   ctx.font = font;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#F4F2EC';
+  ctx.fillStyle = '#ffffff';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   lines.forEach((line, index) => {
@@ -993,16 +1005,95 @@ function buildEnglishOnly(faceA, faceB) {
   }
 }
 
-function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single) {
-  const { texture, aspect, lines } = makeCaptionTexture(text, maxWidth / lineHeight, single);
+function buildChineseOnly(faceA, faceB) {
+  const name = findLine(faceA, 'text-邓乐天');
+  const nameBox = name ? localBounds(name, faceA) : { min: { x: -4.15, z: -2.1 }, max: { z: -1.2 } };
+  const x = nameBox.min.x;
+  const maxWidth = Math.max(2.4, -1.08 - x);
+  const serif = { family: '"Noto Serif SC", "Source Han Serif SC", serif', weight: 600, size: 256, lineBox: 300 };
+  const top = nameBox.max.z + 0.34;
+  const bottom = TEXT_BOTTOM - 0.08;
+  const tagH = 0.48;
+  const skillH = 0.4;
+  const placeH = 0.36;
+  const gap = Math.max(0.16, (bottom - top - (tagH * 2 + skillH + placeH)) / 3);
+  let z = top;
+  z = addPlainLabel(faceA, '懂业务，也能\n把它做出来。', x, z, tagH, maxWidth, 0.74, 'tag', true, serif, 'zh-only');
+  z += gap;
+  z = addPlainLabel(faceA, 'AI · 营销 · 设计', x, z, skillH, maxWidth, 0.74, 'skills', true, serif, 'zh-only');
+  z += gap;
+  addPlainLabel(faceA, '新西兰 · 基督城', x, z, placeH, maxWidth, 0.74, 'place', true, serif, 'zh-only');
+
+  const contact = findLine(faceB, 'text-CONTACT · LE');
+  if (contact) {
+    const box = localBounds(contact, faceB);
+    addPlainLabel(faceB, '联系 · 邓乐天', box.min.x, box.min.z, Math.max(0.24, (box.max.z - box.min.z) * 1.35), 3.4, 0.2, 'header', true, serif, 'zh-only');
+  }
+  for (const [source, line, id] of [
+    ['text-邮箱 Email', '邮箱', 'mail'],
+    ['text-微信 WeChat', '微信', 'wechat'],
+    ['text-电话 Phone', '电话', 'phone'],
+  ]) {
+    const mesh = findLine(faceB, source);
+    if (!mesh) continue;
+    const box = localBounds(mesh, faceB);
+    addPlainLabel(faceB, line, box.min.x, box.min.z, Math.max(0.22, (box.max.z - box.min.z) * 1.2), 1.5, 0.2, id, true, serif, 'zh-only');
+  }
+  const qr = faceB.getObjectByName('whatsapp-qr');
+  if (qr) {
+    const box = localBounds(qr, faceB);
+    addPlainLabel(faceB, '扫码加 WhatsApp', box.min.x, box.min.z - 0.24, 0.18, Math.max(1.2, box.max.x - box.min.x), 0.2, 'qr', true, serif, 'zh-only');
+  }
+  keepEmailClear(faceB);
+}
+
+let emailFit = null;
+
+function keepEmailClear(faceB) {
+  const email = findLine(faceB, 'text-dengletian70');
+  if (!email) return;
+  const box = localBounds(email, faceB);
+  const limit = -0.48;
+  emailFit = {
+    mesh: email,
+    scale: email.scale.x,
+    x: email.position.x,
+    minX: box.min.x,
+    pureScale: email.scale.x,
+  };
+  if (box.max.x > limit) {
+    const width = Math.max(0.01, box.max.x - box.min.x);
+    emailFit.pureScale = email.scale.x * Math.max(0.62, (limit - box.min.x) / width);
+  }
+}
+
+function applyEmailFit(pure) {
+  if (!emailFit) return;
+  const { mesh, scale, x, minX, pureScale } = emailFit;
+  mesh.scale.x = pure ? pureScale : scale;
+  mesh.position.x = x;
+  if (pure) {
+    const box = localBounds(mesh, mesh.parent);
+    mesh.position.x += minX - box.min.x;
+  }
+  const shadow = mesh.parent?.getObjectByName(`shadow-${mesh.name}`);
+  if (!shadow) return;
+  shadow.scale.x = mesh.scale.x;
+  shadow.position.x = mesh.position.x + 0.012;
+}
+
+function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single, style, prefix = 'en-only') {
+  const { texture, aspect, lines } = makeCaptionTexture(text, maxWidth / lineHeight, single, style);
   let height = lineHeight * lines;
   let width = height * aspect;
   if (width > maxWidth) {
     width = maxWidth;
     height = width / aspect;
   }
+  texture.colorSpace = THREE.NoColorSpace;
   const material = new THREE.MeshBasicMaterial({
-    map: texture,
+    color: 0xf4f2ec,
+    alphaMap: texture,
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -1011,7 +1102,7 @@ function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single) 
     polygonOffsetUnits: -1,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
-  mesh.name = `text-en-only-${id}`;
+  mesh.name = `text-${prefix}-${id}`;
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(x + width / 2, y, z + height / 2);
   mesh.renderOrder = 3;
@@ -1020,15 +1111,15 @@ function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single) 
   const shadow = new THREE.Mesh(
     mesh.geometry,
     new THREE.MeshBasicMaterial({
-      map: texture,
       color: 0x140e0a,
+      alphaMap: texture,
       transparent: true,
-      opacity: 0.78,
+      opacity: 0.8,
       depthWrite: false,
       side: THREE.DoubleSide,
     }),
   );
-  shadow.name = `shadow-en-only-${id}`;
+  shadow.name = `shadow-${prefix}-${id}`;
   shadow.rotation.copy(mesh.rotation);
   shadow.position.copy(mesh.position);
   shadow.position.x += 0.01;
@@ -1052,20 +1143,41 @@ function hiddenWhenEnglish(name) {
   return false;
 }
 
+function hiddenInPure(base) {
+  if (base.startsWith('name-flower')) return true;
+  if (base.startsWith('text-(James)')) return true;
+  if (base.startsWith('text-en-')) return true;
+  if (/懂业务|营销|基督城/.test(base)) return true;
+  if (base.startsWith('text-Christchurch')) return true;
+  if (/CONTACT/i.test(base)) return true;
+  if (/邮箱|微信|电话/.test(base)) return true;
+  if (/qr/i.test(base)) return false;
+  if (/WhatsApp/i.test(base)) return true;
+  return false;
+}
+
+function visibleInLanguage(name, mode) {
+  if (name.startsWith('text-zh-only-') || name.startsWith('shadow-zh-only-')) return mode === 'zh';
+  if (name.startsWith('text-en-only-') || name.startsWith('shadow-en-only-')) return mode === 'en';
+  const base = name.startsWith('shadow-') ? name.slice('shadow-'.length) : name;
+  if (base.startsWith('text-en-')) return mode === 'bi';
+  if (mode === 'en') return !hiddenWhenEnglish(base);
+  if (mode === 'zh') return !hiddenInPure(base);
+  return true;
+}
+
 function applyLanguage(lang, updateUrl) {
-  cardLang = lang === 'en' ? 'en' : 'zh';
-  const english = cardLang === 'en';
+  cardLang = lang === 'en' ? 'en' : lang === 'zh' ? 'zh' : 'bi';
   if (pivot) {
     pivot.traverse((object) => {
       const name = object.name || '';
       if (!name) return;
-      if (name.startsWith('text-en-only-') || name.startsWith('shadow-en-only-')) {
-        object.visible = english;
-        return;
-      }
-      if (hiddenWhenEnglish(name)) object.visible = !english;
+      const next = visibleInLanguage(name, cardLang);
+      if (object.visible !== next) object.visible = next;
     });
   }
+  applyEmailFit(cardLang === 'zh');
+  const english = cardLang === 'en';
   const zh = document.getElementById('footer-zh');
   const en = document.getElementById('footer-en');
   if (zh) zh.hidden = english;
@@ -1078,7 +1190,8 @@ function applyLanguage(lang, updateUrl) {
   }
   if (updateUrl) {
     const url = new URL(window.location.href);
-    if (english) url.searchParams.set('lang', 'en');
+    if (cardLang === 'en') url.searchParams.set('lang', 'en');
+    else if (cardLang === 'zh') url.searchParams.set('lang', 'zh');
     else url.searchParams.delete('lang');
     window.history.replaceState(null, '', url);
   }
