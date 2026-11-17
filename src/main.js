@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -56,20 +55,8 @@ scene.background = makeBackground();
 const camera = new THREE.PerspectiveCamera(FOV, 1, 0.05, 200);
 camera.position.set(0, 0, 12);
 
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.055;
-controls.enablePan = false;
-controls.zoomToCursor = true;
-controls.rotateSpeed = 1.05;
-controls.zoomSpeed = 0.9;
-controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
-// Yaw is unlimited in both directions. Polar only tilts enough for a three-quarter view.
-controls.minAzimuthAngle = -Infinity;
-controls.maxAzimuthAngle = Infinity;
-controls.minPolarAngle = Math.PI / 2 - 0.62;
-controls.maxPolarAngle = Math.PI / 2 + 0.48;
-controls.target.set(0, 0, 0);
+// Quaternion orbit: yaw and pitch both tumble a full turn without a polar lock.
+const controls = createViewRig(camera, canvas);
 
 const hemi = new THREE.HemisphereLight(0xe4e9ff, 0x141824, 0.2);
 scene.add(hemi);
@@ -170,6 +157,19 @@ controls.addEventListener('end', () => {
 });
 canvas.addEventListener('wheel', poke, { passive: true });
 
+const facingDir = new THREE.Vector3();
+const frontNormal = new THREE.Vector3();
+
+function frontExposure() {
+  facingDir.copy(camera.position).sub(controls.target);
+  if (facingDir.lengthSq() < 1e-8) return 1;
+  facingDir.normalize();
+  // Island root turns the front's +Y into the pivot's +Z.
+  frontNormal.set(0, 0, 1).applyQuaternion(pivot.quaternion);
+  const facing = facingDir.dot(frontNormal);
+  return THREE.MathUtils.smoothstep(facing, 0.02, 0.42);
+}
+
 function wrapAngle(angle) {
   const full = Math.PI * 2;
   return ((angle + Math.PI) % full + full) % full - Math.PI;
@@ -240,6 +240,140 @@ function fail(message) {
   loadingEl.classList.remove('hide');
 }
 
+function createViewRig(cam, element) {
+  const target = new THREE.Vector3();
+  const view = new THREE.Quaternion();
+  const spin = new THREE.Quaternion();
+  const identity = new THREE.Quaternion();
+  const offset = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const yawStep = new THREE.Quaternion();
+  const pitchStep = new THREE.Quaternion();
+  const listeners = { start: new Set(), end: new Set() };
+  const pointers = new Map();
+  let distance = 12;
+  let minDistance = 1.7;
+  let maxDistance = 40;
+  let dragging = false;
+  let pinchDistance = 0;
+  const rig = {
+    target,
+    enabled: true,
+    autoRotate: false,
+    autoRotateSpeed: AUTO_ROTATE_SPEED,
+    dampingFactor: 0.055,
+    rotateSpeed: 1.05,
+    zoomSpeed: 0.9,
+    get minDistance() {
+      return minDistance;
+    },
+    set minDistance(value) {
+      minDistance = value;
+    },
+    get maxDistance() {
+      return maxDistance;
+    },
+    set maxDistance(value) {
+      maxDistance = value;
+    },
+    addEventListener(type, handler) {
+      listeners[type]?.add(handler);
+    },
+    apply() {
+      offset.set(0, 0, distance).applyQuaternion(view);
+      cam.position.copy(target).add(offset);
+      cam.up.set(0, 1, 0).applyQuaternion(view);
+      cam.lookAt(target);
+    },
+    setFromOffset(next) {
+      distance = THREE.MathUtils.clamp(next.length(), minDistance, maxDistance);
+      const zAxis = next.clone().normalize();
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      if (Math.abs(zAxis.dot(yAxis)) > 0.98) yAxis.set(0, 0, zAxis.y > 0 ? -1 : 1);
+      const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+      yAxis.crossVectors(zAxis, xAxis).normalize();
+      view.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
+      spin.identity();
+      rig.apply();
+    },
+    update() {
+      if (!dragging) {
+        if (rig.autoRotate && rig.enabled) {
+          yawStep.setFromAxisAngle(up.set(0, 1, 0), (2 * Math.PI * rig.autoRotateSpeed) / 3600);
+          view.premultiply(yawStep);
+        }
+        view.premultiply(spin);
+        spin.slerp(identity, rig.dampingFactor);
+      }
+      rig.apply();
+    },
+  };
+
+  function emit(type) {
+    for (const handler of listeners[type] || []) handler();
+  }
+
+  function rotateBy(dx, dy) {
+    const speed = 0.0052 * rig.rotateSpeed;
+    right.set(1, 0, 0).applyQuaternion(view);
+    up.set(0, 1, 0).applyQuaternion(view);
+    yawStep.setFromAxisAngle(up, -dx * speed);
+    pitchStep.setFromAxisAngle(right, -dy * speed);
+    const step = yawStep.multiply(pitchStep);
+    view.premultiply(step);
+    spin.copy(step);
+    rig.apply();
+  }
+
+  function dolly(scale) {
+    distance = THREE.MathUtils.clamp(distance * scale, minDistance, maxDistance);
+    rig.apply();
+  }
+
+  element.addEventListener('pointerdown', (event) => {
+    if (!rig.enabled || event.button > 0) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 1) {
+      dragging = true;
+      spin.identity();
+      element.setPointerCapture?.(event.pointerId);
+      emit('start');
+    }
+  });
+  element.addEventListener('pointermove', (event) => {
+    const previous = pointers.get(event.pointerId);
+    if (!previous || !rig.enabled) return;
+    const next = { x: event.clientX, y: event.clientY };
+    if (pointers.size === 1 && dragging) rotateBy(next.x - previous.x, next.y - previous.y);
+    pointers.set(event.pointerId, next);
+    if (pointers.size === 2) {
+      const pts = [...pointers.values()];
+      const span = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (pinchDistance > 0) dolly(pinchDistance / span);
+      pinchDistance = span;
+    }
+  });
+  function endPointer(event) {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) pinchDistance = 0;
+    if (pointers.size === 0 && dragging) {
+      dragging = false;
+      emit('end');
+    }
+  }
+  element.addEventListener('pointerup', endPointer);
+  element.addEventListener('pointercancel', endPointer);
+  element.addEventListener('wheel', (event) => {
+    if (!rig.enabled) return;
+    event.preventDefault();
+    dolly(Math.exp(event.deltaY * 0.00115 * rig.zoomSpeed));
+  }, { passive: false });
+  rig.apply();
+  return rig;
+}
+
 function frameCamera() {
   const box = new THREE.Box3().setFromObject(pivot);
   state.bounds = {
@@ -256,14 +390,12 @@ function frameCamera() {
   const distY = halfY / Math.tan(vFov / 2);
   const distX = halfX / (Math.tan(vFov / 2) * aspect);
   const dist = Math.max(distX, distY) * FIT_MARGIN;
-  camera.position.set(0, 0, dist);
   camera.near = 0.04;
   camera.far = dist * 14;
   camera.updateProjectionMatrix();
-  camera.lookAt(0, 0, 0);
   controls.minDistance = 1.7;
   controls.maxDistance = dist * 2.5;
-  controls.update();
+  controls.setFromOffset(new THREE.Vector3(0, 0, dist));
 }
 
 function resize() {
@@ -429,6 +561,10 @@ async function dressCard(root) {
       front.update(t, reduced);
       forest.update(t, reduced);
       glass.update(t, reduced);
+    },
+    setPresence(amount) {
+      front.setPresence(amount);
+      forest.setPresence(1 - amount);
     },
   };
 }
@@ -1009,14 +1145,22 @@ function buildFrontSky(faceA, maps, terrain) {
     return planet;
   });
   const planets = [jupiter, saturn, ...embedded];
+  const floaters = [sun.group, jupiter.group, saturn.group];
   const lamp = new THREE.PointLight(0xffc48a, 110, 0, 2);
   sun.group.add(lamp);
+  let presence = 1;
   return {
+    setPresence(amount) {
+      presence = amount;
+    },
     update(t, reduced) {
       const flick = reduced ? 0 : Math.sin(t * 1.6) * 0.02 + Math.sin(t * 3.8) * 0.01;
-      sun.material.emissiveIntensity = 2.45 + flick;
-      sun.corona.material.opacity = 0.7 + flick;
-      sun.inner.material.opacity = 0.46 + flick * 0.25;
+      const shown = presence > 0.03;
+      for (const body of floaters) body.visible = shown;
+      lamp.intensity = shown ? 110 * presence : 0;
+      sun.material.emissiveIntensity = (2.45 + flick) * presence;
+      sun.corona.material.opacity = (0.7 + flick) * presence;
+      sun.inner.material.opacity = (0.46 + flick * 0.25) * presence;
       if (!reduced) sun.paint(t);
       const time = reduced ? 0.6 : t;
       for (const planet of planets) planet.spin.rotation.y = time * planet.rate;
@@ -1171,44 +1315,78 @@ function buildForestLife(faceB) {
       butterflies.update(time, reduced);
       fireflies.update(time, reduced);
     },
+    setPresence(amount) {
+      clouds.group.visible = amount > 0.04;
+    },
   };
 }
 
 function buildClouds() {
-  const map = makeGlowTexture('#ffffff');
+  const map = makeCloudTexture();
   const group = new THREE.Group();
   const clouds = [];
-    const spots = [
-    [2.6, 1.35, -0.2, 1.15],
-    [3.5, 1.7, 0.55, 1.35],
-    [1.9, 1.15, 1.05, 0.95],
-    [4.0, 1.45, -1.15, 1.05],
+  // Screen-up on the back is negative local Z. The card top is about z=-2.7,
+  // so these sit in the sky above the peaks, on the mountain side (positive x),
+  // clear of the contact text and QR.
+  const spots = [
+    [1.7, 1.55, -3.55, 2.05, 0.82],
+    [3.05, 1.85, -4.15, 2.35, 0.76],
+    [2.35, 1.25, -3.15, 1.7, 0.7],
+    [3.55, 1.65, -3.75, 1.9, 0.72],
   ];
   for (let i = 0; i < spots.length; i += 1) {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map,
-      color: 0xf4f1ea,
+      color: 0xfffdf8,
       transparent: true,
-      opacity: 0.2,
+      opacity: spots[i][4],
       depthWrite: false,
+      depthTest: true,
     }));
     sprite.renderOrder = 4;
     const [x, y, z, scale] = spots[i];
     sprite.position.set(x, y, z);
-    sprite.scale.set(scale, scale * 0.62, 1);
+    sprite.scale.set(scale, scale * 0.58, 1);
     group.add(sprite);
-    clouds.push({ sprite, x, y, z, scale, phase: i * 1.7 });
+    clouds.push({ sprite, x, y, z, phase: i * 1.7 });
   }
   return {
     group,
     update(t) {
       for (const cloud of clouds) {
-        cloud.sprite.position.x = cloud.x + Math.sin(t * 0.08 + cloud.phase) * 0.35;
-        cloud.sprite.position.z = cloud.z + Math.cos(t * 0.06 + cloud.phase) * 0.22;
-        cloud.sprite.position.y = cloud.y + Math.sin(t * 0.12 + cloud.phase) * 0.06;
+        cloud.sprite.position.x = cloud.x + Math.sin(t * 0.14 + cloud.phase) * 0.38;
+        cloud.sprite.position.y = cloud.y;
+        cloud.sprite.position.z = cloud.z + Math.sin(t * 0.27 + cloud.phase) * 0.06;
       }
     },
   };
+}
+
+function makeCloudTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 160;
+  const ctx = canvas.getContext('2d');
+  const puffs = [
+    [78, 88, 46],
+    [128, 74, 54],
+    [176, 90, 42],
+    [108, 78, 36],
+    [150, 84, 34],
+  ];
+  for (const [x, y, radius] of puffs) {
+    const puff = ctx.createRadialGradient(x, y, radius * 0.1, x, y, radius);
+    puff.addColorStop(0, 'rgba(255,253,248,0.95)');
+    puff.addColorStop(0.45, 'rgba(255,253,248,0.55)');
+    puff.addColorStop(1, 'rgba(255,253,248,0)');
+    ctx.fillStyle = puff;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 function buildButterflies() {
@@ -1489,9 +1667,12 @@ function animate() {
     }
   }
   updateBurst(now);
-  if (decor) decor.update(now, reduceMotion);
   stars.update(now * 0.001, reduceMotion);
   controls.update();
+  if (decor) {
+    decor.setPresence(frontExposure());
+    decor.update(now, reduceMotion);
+  }
   composer.render();
   if (burst.group.visible) {
     // Draw the star after bloom so it cannot blow the whole frame through the bloom buffer.
@@ -1555,14 +1736,11 @@ window.__card = {
   look(azimuth, polar, focus) {
     if (focus) controls.target.set(focus[0], focus[1], focus[2]);
     const dist = Math.max(camera.position.distanceTo(controls.target), 8);
-    const safePolar = THREE.MathUtils.clamp(polar, controls.minPolarAngle, controls.maxPolarAngle);
-    camera.position.set(
-      controls.target.x + dist * Math.sin(safePolar) * Math.sin(azimuth),
-      controls.target.y + dist * Math.cos(safePolar),
-      controls.target.z + dist * Math.sin(safePolar) * Math.cos(azimuth),
-    );
-    camera.lookAt(controls.target);
-    controls.update();
+    controls.setFromOffset(new THREE.Vector3(
+      dist * Math.sin(polar) * Math.sin(azimuth),
+      dist * Math.cos(polar),
+      dist * Math.sin(polar) * Math.cos(azimuth),
+    ));
   },
   previewFlip(u) {
     if (u === null || u === undefined) {
@@ -1578,8 +1756,7 @@ window.__card = {
     const offset = camera.position.clone().sub(controls.target);
     if (offset.lengthSq() < 1e-6) offset.set(0, 0, 1);
     offset.setLength(THREE.MathUtils.clamp(distance, controls.minDistance, controls.maxDistance));
-    camera.position.copy(controls.target).add(offset);
-    controls.update();
+    controls.setFromOffset(offset);
   },
 };
 
