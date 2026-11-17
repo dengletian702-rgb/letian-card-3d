@@ -33,6 +33,7 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
 });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.localClippingEnabled = true;
 renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1;
 // Default clear is white. Any stray clear during the flip must stay midnight, not flash.
@@ -105,8 +106,8 @@ pmrem.dispose();
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 // Threshold stays above 1 so the unlit photo and QR never enter the bloom buffer.
-const bloomStrength = coarseQuery.matches ? 0.28 : 0.34;
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), bloomStrength, 0.36, 1.4);
+const bloomStrength = coarseQuery.matches ? 0.36 : 0.48;
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), bloomStrength, 0.32, 1.4);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
@@ -323,6 +324,27 @@ function hideFrontDecor(name) {
   );
 }
 
+function tuckBackInside() {
+  const planes = [
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 2.22),
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), 2.22),
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), 4.18),
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), 4.18),
+  ];
+  const applyPlanes = (material) => {
+    if (!material) return material;
+    const next = material.clone();
+    next.clippingPlanes = planes;
+    next.clipShadows = true;
+    return next;
+  };
+  pivot.traverse((object) => {
+    if (!object.isMesh || !/^(conifer|beech|alpine-peak)/.test(object.name || '')) return;
+    if (Array.isArray(object.material)) object.material = object.material.map(applyPlanes);
+    else object.material = applyPlanes(object.material);
+  });
+}
+
 function isSealScript(name) {
   return name.startsWith('text-乐');
 }
@@ -392,12 +414,13 @@ async function dressCard(root) {
   if (grass) grass.visible = false;
   const faceA = root.getObjectByName('faceA-alien');
   const faceB = root.getObjectByName('faceB-forest');
+  tuckBackInside();
   const terrain = await buildLunarTerrain(faceA);
   addBackPlates(faceB);
   addTypeShadows(root);
   const glass = buildGlassPanel(faceA);
   const skyMaps = await loadSkyMaps();
-  const front = buildFrontSky(faceA, skyMaps);
+  const front = buildFrontSky(faceA, skyMaps, terrain);
   const forest = buildForestLife(faceB);
   void terrain;
   return {
@@ -707,6 +730,7 @@ async function buildLunarTerrain(faceA) {
     ) / 4;
     let h = (shaped(raw) * (1 - mask) + PLATEAU_LEVEL * mask) * RELIEF_AMP;
     h += ridge * 2.4 * (1 - mask);
+    if (!ignoreCraters) h += embedDelta(x, z) * (1 - mask);
     return Math.max(0, h);
   };
   for (let i = 0; i < pos.count; i += 1) {
@@ -739,6 +763,23 @@ const CARD_HALF_W = CARD_W / 2;
 const CARD_HALF_H = CARD_H / 2;
 const RELIEF_AMP = 0.82;
 const PLATEAU_LEVEL = 0.56;
+const EMBEDDED = [
+  { key: 'earth', x: 0.15, z: 1.62, radius: 0.5, bury: 0.42, crater: 0.78, depth: 0.68, rim: 0.14 },
+  { key: 'mars', x: 2.55, z: 2.06, radius: 0.4, bury: 0.4, crater: 0.64, depth: 0.54, rim: 0.12 },
+  { key: 'moon', x: 0.05, z: -1.78, radius: 0.36, bury: 0.38, crater: 0.58, depth: 0.46, rim: 0.11 },
+];
+
+function embedDelta(x, z) {
+  let lift = 0;
+  for (const site of EMBEDDED) {
+    const n = Math.hypot(x - site.x, z - site.z) / site.crater;
+    if (n > 1.85) continue;
+    const bowl = n < 1 ? (1 - n * n) * (1 - 0.22 * n * n) : 0;
+    const rim = Math.exp(-(((n - 1.02) / 0.16) ** 2));
+    lift += -site.depth * bowl + site.rim * rim;
+  }
+  return lift;
+}
 
 function liftFrontContent(faceA, surface) {
   const sealBase = surface + 0.02;
@@ -925,33 +966,57 @@ function buildGlassPanel(faceA) {
   };
 }
 
-function buildFrontSky(faceA, maps) {
+function buildFrontSky(faceA, maps, terrain) {
   const group = new THREE.Group();
   faceA.add(group);
   const sun = buildSun();
   sun.group.position.set(5.15, -0.12, -3.05);
   group.add(sun.group);
-  const planets = [
-    makePlanet(maps.jupiter, 0.7, 0xcbb892, 0.22, 0.12, 0.72),
-    makePlanet(maps.earth, 0.5, 0x8ec8ff, 0.16, 0.41, 0.9),
-    makePlanet(maps.mars, 0.36, 0xffb090, 0.14, 0.36, 0.58),
-    makePlanet(maps.moon, 0.28, 0xd5dbe6, 0.05, 0.09, 0.26),
-    makeSaturn(maps.saturn, maps.ring),
-  ];
-  planets[0].group.position.set(-6.2, 1.25, -1.45);
-  planets[1].group.position.set(-6.15, 0.95, 2.05);
-  planets[2].group.position.set(6.35, 0.85, 2.25);
-  planets[3].group.position.set(-5.55, 1.85, 0.15);
-  planets[4].group.position.set(6.85, 1.55, 0.05);
-  for (const planet of planets) group.add(planet.group);
+  const jupiter = makePlanet(maps.jupiter, 0.7, 0xcbb892, 0.22, 0.12, 1.05);
+  const saturn = makeSaturn(maps.saturn, maps.ring);
+  jupiter.group.position.set(-6.2, 1.35, -1.45);
+  saturn.group.position.set(6.85, 1.55, 0.05);
+  group.add(jupiter.group, saturn.group);
+  const embedded = EMBEDDED.map((site) => {
+    const planet = makePlanet(
+      maps[site.key],
+      site.radius,
+      site.key === 'earth' ? 0x8ec8ff : site.key === 'mars' ? 0xffb090 : 0xd5dbe6,
+      site.key === 'earth' ? 0.15 : site.key === 'mars' ? 0.12 : 0.05,
+      site.key === 'earth' ? 0.4 : 0.2,
+      site.key === 'earth' ? 1.15 : site.key === 'mars' ? 0.85 : 0.55,
+      true,
+    );
+    const ground = terrain.heightAt(site.x, site.z, true);
+    planet.group.position.set(site.x, ground - site.radius * site.bury, site.z);
+    const shade = new THREE.Mesh(
+      new THREE.CircleGeometry(site.radius * 0.92, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0x050403,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    shade.rotation.x = -Math.PI / 2;
+    shade.position.y = site.radius * site.bury + 0.012;
+    shade.renderOrder = 1;
+    planet.group.add(shade);
+    group.add(planet.group);
+    return planet;
+  });
+  const planets = [jupiter, saturn, ...embedded];
   const lamp = new THREE.PointLight(0xffc48a, 110, 0, 2);
   sun.group.add(lamp);
   return {
     update(t, reduced) {
-      const flick = reduced ? 0 : Math.sin(t * 1.6) * 0.025 + Math.sin(t * 3.8) * 0.012;
-      sun.material.emissiveIntensity = 2.05 + flick * 1.2;
-      sun.corona.material.opacity = 0.62 + flick;
-      sun.inner.material.opacity = 0.4 + flick * 0.3;
+      const flick = reduced ? 0 : Math.sin(t * 1.6) * 0.02 + Math.sin(t * 3.8) * 0.01;
+      sun.material.emissiveIntensity = 2.45 + flick;
+      sun.corona.material.opacity = 0.7 + flick;
+      sun.inner.material.opacity = 0.46 + flick * 0.25;
       if (!reduced) sun.paint(t);
       const time = reduced ? 0.6 : t;
       for (const planet of planets) planet.spin.rotation.y = time * planet.rate;
@@ -965,7 +1030,7 @@ function buildSun() {
     color: 0x2a1206,
     emissive: 0xfff3d4,
     emissiveMap: painted.tex,
-    emissiveIntensity: 2.05,
+    emissiveIntensity: 2.45,
     roughness: 1,
     metalness: 0,
   });
@@ -974,7 +1039,7 @@ function buildSun() {
     map: makeCoronaTexture(),
     color: 0xffc56a,
     transparent: true,
-    opacity: 0.52,
+    opacity: 0.7,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   }));
@@ -993,14 +1058,16 @@ function buildSun() {
   return { group, material, corona, inner, paint: painted.paint };
 }
 
-function makePlanet(map, radius, glow, rate, tilt, atmoStrength) {
+function makePlanet(map, radius, glow, rate, tilt, atmoStrength, embedded = false) {
   const material = new THREE.MeshStandardMaterial({
     map,
-    roughness: 0.62,
+    roughness: embedded ? 0.78 : 0.62,
     metalness: 0.03,
     envMapIntensity: 0.4,
   });
   const body = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 32), material);
+  body.castShadow = embedded;
+  body.receiveShadow = embedded;
   const atmo = new THREE.Mesh(
     new THREE.SphereGeometry(radius * 1.06, 40, 28),
     atmosphereMaterial(glow, atmoStrength),
@@ -1039,14 +1106,16 @@ function makeSaturn(map, ringMap) {
   ring.rotation.x = Math.PI / 2;
   const atmo = new THREE.Mesh(
     new THREE.SphereGeometry(radius * 1.07, 40, 28),
-    atmosphereMaterial(0xffe3b8, 0.62),
+    atmosphereMaterial(0xffe3b8, 0.95),
   );
   const spin = new THREE.Group();
   spin.add(body, ring);
-  spin.rotation.z = 0.42;
-  spin.rotation.x = 0.18;
+  const tilt = new THREE.Group();
+  // Opening of about 27 degrees, so the rings read as an ellipse, not a face-on disc.
+  tilt.rotation.x = 1.1;
+  tilt.add(spin);
   const group = new THREE.Group();
-  group.add(spin, atmo);
+  group.add(tilt, atmo);
   return { group, spin, rate: 0.2 };
 }
 
@@ -1483,7 +1552,8 @@ window.__card = {
    * Hold the flip at progress u (0 front, 1 back) for screenshots.
    * Pass null to release the scrub.
    */
-  look(azimuth, polar) {
+  look(azimuth, polar, focus) {
+    if (focus) controls.target.set(focus[0], focus[1], focus[2]);
     const dist = Math.max(camera.position.distanceTo(controls.target), 8);
     const safePolar = THREE.MathUtils.clamp(polar, controls.minPolarAngle, controls.maxPolarAngle);
     camera.position.set(
