@@ -26,6 +26,7 @@ test('loads, drags, zooms, and flips', async ({ page }) => {
 
   await expect(page).toHaveTitle('Letian Deng — 3D Card');
   await expect(page.locator('footer')).toContainText('Letian Deng · AI · 营销 · 设计');
+  await expect(page.locator('footer')).toContainText('Marketing · Design');
   await expect(page.locator('footer a')).toHaveAttribute(
     'href',
     'https://github.com/dengletian702-rgb/letian-card-3d',
