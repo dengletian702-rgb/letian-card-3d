@@ -16,6 +16,8 @@ const FLIP_MS = 860;
 const BURST_MS = 780;
 const AUTO_ROTATE_SPEED = 0.7;
 
+const recordDpr = Number(new URLSearchParams(window.location.search).get('dpr')) || 0;
+
 const canvas = document.getElementById('view');
 const loadingEl = document.getElementById('loading');
 const loadingLabel = document.getElementById('loading-label');
@@ -27,9 +29,10 @@ const coarseQuery = window.matchMedia('(pointer: coarse)');
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: true,
+  antialias: recordDpr === 0,
   alpha: false,
   powerPreference: 'high-performance',
+  preserveDrawingBuffer: recordDpr > 0,
 });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.localClippingEnabled = true;
@@ -47,7 +50,9 @@ const rendererName = debugInfo
   : gl.getParameter(gl.RENDERER);
 const softwareGL = /swiftshader|llvmpipe|softpipe|software/i.test(rendererName || '');
 const pixelCap = softwareGL ? 1 : coarseQuery.matches ? 1.35 : 1.75;
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelCap));
+renderer.setPixelRatio(recordDpr > 0
+  ? Math.min(recordDpr, 2)
+  : Math.min(window.devicePixelRatio || 1, pixelCap));
 
 const scene = new THREE.Scene();
 scene.background = makeBackground();
@@ -116,6 +121,7 @@ const state = {
   flipStart: 0,
   frames: 0,
   scrub: null,
+  paused: false,
   burst: 0,
   error: null,
   interacted: false,
@@ -405,6 +411,7 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
   composer.setSize(width, height);
+  if (recordDpr > 0) bloomPass.setSize(640, 640);
   if (state.ready && !state.interacted) frameCamera();
 }
 
@@ -570,10 +577,10 @@ async function dressCard(root) {
 }
 
 const CAPTIONS = [
-  { source: 'text-懂业务，也能把它做出来。', line: 'I understand the business, and I can build it.', height: 0.145 },
-  { source: 'text-AI · 营销 · 设计', line: 'AI · Marketing · Design', height: 0.13 },
-  { source: 'text-Christchurch', line: 'Christchurch, New Zealand', height: 0.125 },
-  { source: 'text-一人公司 + AI 团队', line: 'One-Person Company + AI Team', height: 0.15 },
+  { source: 'text-懂业务，也能把它做出来。', line: 'I understand the business, and I can build it.', sx: 1.08, sz: 1.4, limitX: -1.25 },
+  { source: 'text-AI · 营销 · 设计', line: 'AI · Marketing · Design', sx: 1.12, sz: 1.45, limitX: -1.25 },
+  { source: 'text-Christchurch', line: 'Christchurch, New Zealand', sx: 1.1, sz: 1.35, limitX: -1.25, floorZ: 2.28 },
+  { source: 'text-一人公司 + AI 团队', line: 'One-Person Company + AI Team', sx: 1.08, sz: 1.22, limitX: -1.85, floorZ: -0.92 },
 ];
 
 function findLine(root, source) {
@@ -581,56 +588,163 @@ function findLine(root, source) {
 }
 
 function addEnglishCaptions(faceA, faceB) {
+  enlargeFaceText(faceA, [
+    { name: 'text-邓乐天', sx: 1.22, sz: 1.28 },
+    { name: 'name-flower-dots', sx: 1.08, sz: 1.12 },
+    { name: 'text-(James)', sx: 1.18, sz: 1.22 },
+  ]);
+  enlargeFaceText(faceB, faceBTextNames(faceB).map((name) => ({ name, sx: 1.12, sz: 1.22 })));
+  const frontStack = [];
   for (const caption of CAPTIONS) {
     const source = findLine(faceA, caption.source) || findLine(faceB, caption.source);
     if (!source) continue;
     const parent = source.parent;
-    const box = localBounds(source, parent);
-    const { texture, aspect } = makeCaptionTexture(caption.line);
-    let height = caption.height;
-    let width = height * aspect;
-    const maxWidth = Math.max(0.4, box.max.x - box.min.x);
-    if (width > maxWidth) {
-      width = maxWidth;
+    let grown = growFromTopLeft(source, parent, caption.sx, caption.sz);
+    const onFront = parent === faceA;
+    if (!onFront && caption.floorZ !== undefined) {
+      const needed = (grown.max.z - grown.min.z) * 0.78 * 2 + 0.08;
+      if (grown.max.z + needed > caption.floorZ) {
+        source.position.z -= grown.max.z + needed - caption.floorZ;
+        grown = localBounds(source, parent);
+      }
+    }
+    if (onFront) frontStack.push({ source, parent, caption, box: grown });
+    else placeCaption(source, parent, caption, grown, false);
+  }
+  packFrontStack(frontStack);
+  clearContactHeadline(faceB);
+}
+
+function clearContactHeadline(faceB) {
+  const contact = findLine(faceB, 'text-CONTACT · LE');
+  const title = findLine(faceB, 'text-一人公司 + AI 团队');
+  if (!contact || !title) return;
+  const gap = 0.09;
+  const contactBox = localBounds(contact, faceB);
+  const titleBox = localBounds(title, faceB);
+  const overlap = contactBox.max.z + gap - titleBox.min.z;
+  if (overlap <= 0) return;
+  const topLimit = -2.58;
+  const room = Math.max(0, contactBox.min.z - topLimit);
+  const shift = Math.min(overlap, room);
+  contact.position.z -= shift;
+  const rest = overlap - shift;
+  if (rest <= 0.001) return;
+  const english = faceB.children.find((child) => child.name?.startsWith('text-en-One-Person'));
+  const shadow = faceB.children.find((child) => child.name?.startsWith('shadow-text-en-One-Person'));
+  title.position.z += rest;
+  if (english) english.position.z += rest;
+  if (shadow) shadow.position.z += rest;
+  const qr = faceB.getObjectByName('whatsapp-qr');
+  if (!qr || !english) return;
+  const qrBox = localBounds(qr, faceB);
+  const enBox = localBounds(english, faceB);
+  const hit = enBox.max.z + 0.08 - qrBox.min.z;
+  if (hit <= 0) return;
+  const height = Math.max(0.001, enBox.max.z - enBox.min.z);
+  const scale = Math.max(0.72, (height - hit) / height);
+  english.scale.y *= scale;
+  if (shadow) shadow.scale.y *= scale;
+  const lift = (height * (1 - scale)) / 2;
+  english.position.z -= lift;
+  if (shadow) shadow.position.z -= lift;
+}
+
+function faceBTextNames(faceB) {
+  const names = [];
+  faceB?.traverse((object) => {
+    const name = object.name || '';
+    if (name.startsWith('text-') && !name.startsWith('text-en-') && !name.includes('一人公司')) names.push(name);
+  });
+  return names;
+}
+
+function enlargeFaceText(root, items) {
+  for (const item of items) {
+    const mesh = findLine(root, item.name);
+    if (!mesh) continue;
+    growFromTopLeft(mesh, mesh.parent, item.sx, item.sz);
+  }
+}
+
+function growFromTopLeft(mesh, parent, scaleX, scaleZ) {
+  const box = localBounds(mesh, parent);
+  const originX = mesh.position.x;
+  const originZ = mesh.position.z;
+  mesh.scale.x *= scaleX;
+  mesh.scale.z *= scaleZ;
+  mesh.position.x = box.min.x - (box.min.x - originX) * scaleX;
+  mesh.position.z = box.min.z - (box.min.z - originZ) * scaleZ;
+  return localBounds(mesh, parent);
+}
+
+function packFrontStack(stack) {
+  if (!stack.length) return;
+  let cursor = localBounds(stack[0].source, stack[0].parent).min.z;
+  for (const item of stack) {
+    const box = localBounds(item.source, item.parent);
+    item.source.position.z += cursor - box.min.z;
+    const placed = localBounds(item.source, item.parent);
+    const used = placeCaption(item.source, item.parent, item.caption, placed, true);
+    cursor = used + 0.05;
+  }
+}
+
+function placeCaption(source, parent, caption, box, onFront) {
+  const chinese = Math.max(0.12, box.max.z - box.min.z);
+  const lineHeight = chinese * 0.78;
+  const maxWidth = Math.max(0.8, Math.min(box.max.x, caption.limitX) - box.min.x);
+  const { texture, aspect, lines } = makeCaptionTexture(caption.line, maxWidth / lineHeight);
+  let height = lineHeight * lines;
+  let width = height * aspect;
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = width / aspect;
+  }
+  if (caption.floorZ !== undefined) {
+    const room = caption.floorZ - box.max.z - 0.02;
+    if (room > 0.06 && height > room) {
+      height = room;
+      width = Math.min(maxWidth, height * aspect);
       height = width / aspect;
     }
-    const material = new THREE.MeshBasicMaterial({
+  }
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+  mesh.name = `text-en-${caption.line.slice(0, 18)}`;
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(box.min.x + width / 2, onFront ? 0.74 : 0.18, box.max.z + 0.02 + height / 2);
+  mesh.renderOrder = 3;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  const shadow = new THREE.Mesh(
+    mesh.geometry,
+    new THREE.MeshBasicMaterial({
       map: texture,
+      color: 0x140e0a,
       transparent: true,
+      opacity: 0.55,
       depthWrite: false,
       side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
-    mesh.name = `text-en-${caption.line.slice(0, 18)}`;
-    mesh.rotation.x = -Math.PI / 2;
-    const onFront = parent === faceA;
-    mesh.position.set(box.min.x + width / 2, onFront ? 0.72 : 0.16, box.max.z + 0.035 + height / 2);
-    mesh.renderOrder = 3;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    const shadow = new THREE.Mesh(
-      mesh.geometry,
-      new THREE.MeshBasicMaterial({
-        map: texture,
-        color: 0x140e0a,
-        transparent: true,
-        opacity: 0.55,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    shadow.name = `shadow-${mesh.name}`;
-    shadow.rotation.copy(mesh.rotation);
-    shadow.position.copy(mesh.position);
-    shadow.position.x += 0.008;
-    shadow.position.z += 0.007;
-    shadow.position.y -= 0.01;
-    shadow.renderOrder = 2;
-    parent.add(shadow, mesh);
-  }
+    }),
+  );
+  shadow.name = `shadow-${mesh.name}`;
+  shadow.rotation.copy(mesh.rotation);
+  shadow.position.copy(mesh.position);
+  shadow.position.x += 0.008;
+  shadow.position.z += 0.007;
+  shadow.position.y -= 0.01;
+  shadow.renderOrder = 2;
+  parent.add(shadow, mesh);
+  return mesh.position.z + height / 2;
 }
 
 function localBounds(object, parent) {
@@ -655,26 +769,55 @@ function localBounds(object, parent) {
   return { min, max };
 }
 
-function makeCaptionTexture(text) {
+function splitCaption(text) {
+  if (text.includes(' · ')) {
+    const parts = text.split(' · ');
+    const mid = Math.ceil(parts.length / 2);
+    return [parts.slice(0, mid).join(' · '), parts.slice(mid).join(' · ')];
+  }
+  const words = text.split(' ');
+  let best = 1;
+  let bestScore = Infinity;
+  for (let i = 1; i < words.length; i += 1) {
+    const score = Math.abs(words.slice(0, i).join(' ').length - words.slice(i).join(' ').length);
+    if (score < bestScore) {
+      best = i;
+      bestScore = score;
+    }
+  }
+  return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+}
+
+function makeCaptionTexture(text, maxAspect) {
+  const fontPx = 256;
+  const font = `600 ${fontPx}px "Segoe UI", Helvetica, Arial, sans-serif`;
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = font;
+  const singleWidth = probe.measureText(text).width;
+  const lines = singleWidth / fontPx > maxAspect ? splitCaption(text) : [text];
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  const font = '600 72px "Segoe UI", Helvetica, Arial, sans-serif';
-  ctx.font = font;
-  const padX = 8;
-  const measured = Math.ceil(ctx.measureText(text).width + padX * 2);
-  canvas.width = Math.max(64, measured);
-  canvas.height = 96;
+  const padX = 28;
+  const lineBox = 300;
+  const widest = Math.max(...lines.map((line) => probe.measureText(line).width));
+  canvas.width = Math.max(256, Math.ceil(widest + padX * 2));
+  canvas.height = lineBox * lines.length;
   ctx.font = font;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#F4F2EC';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  ctx.fillText(text, padX, canvas.height / 2);
+  lines.forEach((line, index) => {
+    ctx.fillText(line, padX, lineBox * index + lineBox / 2);
+  });
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   texture.needsUpdate = true;
-  return { texture, aspect: canvas.width / canvas.height };
+  return { texture, aspect: canvas.width / canvas.height, lines: lines.length };
 }
 
 function recolorTrim(object, color, metalness, roughness, envMapIntensity = 0.4) {
@@ -1757,7 +1900,11 @@ resize();
 
 function animate() {
   requestAnimationFrame(animate);
-  const now = performance.now();
+  if (state.paused) return;
+  drawFrame(performance.now());
+}
+
+function drawFrame(now) {
   if (state.scrub !== null) {
     poseAt(state.scrub, false);
   } else if (state.flipping) {
@@ -1862,6 +2009,10 @@ window.__card = {
     controls.autoRotate = false;
   },
   /** Move the camera along its current view ray. Used by the headless check. */
+  renderStill() {
+    state.paused = true;
+    drawFrame(performance.now());
+  },
   zoomTo(distance) {
     const offset = camera.position.clone().sub(controls.target);
     if (offset.lengthSq() < 1e-6) offset.set(0, 0, 1);
