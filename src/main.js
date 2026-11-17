@@ -563,6 +563,8 @@ async function dressCard(root) {
   const faceB = root.getObjectByName('faceB-forest');
   tuckBackInside();
   const terrain = await buildLunarTerrain(faceA);
+  await document.fonts.load('500 64px "Cormorant Garamond"');
+  await document.fonts.load('italic 500 64px "Cormorant Garamond"');
   addEnglishCaptions(faceA, faceB);
   addBackPlates(faceB);
   addTypeShadows(root);
@@ -626,9 +628,8 @@ function addEnglishCaptions(faceA, faceB) {
   }
   packFrontStack(frontStack);
   clearContactHeadline(faceB);
-  addBackScrim(faceB);
   buildEnglishOnly(faceA, faceB);
-  applyLanguage(cardLang, false);
+  addBackScrim(faceB);
 }
 
 function clearContactHeadline(faceB) {
@@ -902,21 +903,27 @@ function splitCaption(text) {
   return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
 }
 
-function makeCaptionTexture(text, maxAspect, single) {
-  const fontPx = 256;
-  const font = `600 ${fontPx}px "Segoe UI", Helvetica, Arial, sans-serif`;
+function makeCaptionTexture(text, maxAspect, single, style = {}) {
+  const fontPx = style.size || 256;
+  const weight = style.weight || 600;
+  const italic = style.italic ? 'italic ' : '';
+  const family = style.family || '"Segoe UI", Helvetica, Arial, sans-serif';
+  const font = `${italic}${weight} ${fontPx}px ${family}`;
+  const content = style.caps ? text.toUpperCase() : text;
   const probe = document.createElement('canvas').getContext('2d');
   probe.font = font;
-  const singleWidth = probe.measureText(text).width;
-  const lines = !single && singleWidth / fontPx > maxAspect ? splitCaption(text) : [text];
+  probe.letterSpacing = style.tracking || '0px';
+  const singleWidth = probe.measureText(content).width;
+  const lines = !single && singleWidth / fontPx > maxAspect ? splitCaption(content) : [content];
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  const padX = 28;
-  const lineBox = 300;
+  const padX = 36;
+  const lineBox = style.lineBox || 300;
   const widest = Math.max(...lines.map((line) => probe.measureText(line).width));
   canvas.width = Math.max(256, Math.ceil(widest + padX * 2));
   canvas.height = lineBox * lines.length;
   ctx.font = font;
+  ctx.letterSpacing = style.tracking || '0px';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#F4F2EC';
   ctx.textBaseline = 'middle';
@@ -934,27 +941,37 @@ function makeCaptionTexture(text, maxAspect, single) {
   return { texture, aspect: canvas.width / canvas.height, lines: lines.length };
 }
 
+const SERIF = '"Cormorant Garamond", "Palatino Linotype", Palatino, "Times New Roman", serif';
+let jamesHome = null;
+
 function buildEnglishOnly(faceA, faceB) {
-  const name = findLine(faceA, 'text-邓乐天');
-  const nameBox = name ? localBounds(name, faceA) : { min: { x: -4.15, z: -2.15 } };
-  const x = nameBox.min.x;
-  let z = nameBox.min.z;
-  const maxWidth = Math.max(2.4, -0.95 - x);
-  z = addPlainLabel(faceA, 'Letian Deng (James)', x, z, 0.56, maxWidth, 0.74, 'name', true);
-  z += 0.14;
-  z = addPlainLabel(faceA, 'I understand the business, and I can build it.', x, z, 0.4, Math.min(maxWidth, 3.15), 0.74, 'tagline', false);
-  z += 0.12;
-  z = addPlainLabel(faceA, 'AI · Marketing · Design', x, z, 0.42, maxWidth, 0.74, 'skills', true);
-  z += 0.12;
-  z = addPlainLabel(faceA, 'Christchurch, New Zealand', x, z, 0.4, maxWidth, 0.74, 'place', true);
-  if (z > TEXT_BOTTOM) {
-    const lift = z - TEXT_BOTTOM;
-    faceA.traverse((object) => {
-      if (object.name?.startsWith('text-en-only-') || object.name?.startsWith('shadow-en-only-')) {
-        object.position.z -= lift;
-      }
-    });
-  }
+  tuckJamesNearScript(faceA);
+  const script = findLine(faceA, 'name-flower-dots');
+  const james = findLine(faceA, 'text-(James)');
+  const scriptBox = script ? localBounds(script, faceA) : { min: { x: -4.15 }, max: { z: -0.4 } };
+  const jamesBox = james ? localBounds(james, faceA) : scriptBox;
+  const x = scriptBox.min.x;
+  const maxWidth = Math.max(2.3, -1.12 - x);
+  const jamesBottom = jamesBox.max.z + (jamesHome?.dz || 0);
+  const top = jamesBottom + 0.22;
+  const bottom = TEXT_BOTTOM - 0.06;
+  const taglineH = 0.5;
+  const skillsH = 0.36;
+  const placeH = 0.32;
+  const slack = Math.max(0.1, bottom - top - (taglineH * 2 + skillsH + placeH));
+  const gap = slack / 3;
+  let z = top;
+  z = addPlainLabel(faceA, 'I understand the business, and I can build it.', x, z, taglineH, Math.min(maxWidth, 3.2), 0.74, 'tagline', false, {
+    italic: true, weight: 500, family: SERIF, size: 280, lineBox: 320,
+  });
+  z += gap;
+  z = addPlainLabel(faceA, 'AI · Marketing · Design', x, z, skillsH, maxWidth, 0.74, 'skills', true, {
+    caps: true, weight: 600, family: SERIF, tracking: '18px', size: 250, lineBox: 280,
+  });
+  z += gap;
+  addPlainLabel(faceA, 'Christchurch, New Zealand', x, z, placeH, maxWidth, 0.74, 'place', true, {
+    caps: true, weight: 500, family: SERIF, tracking: '22px', size: 240, lineBox: 270,
+  });
 
   const title = findLine(faceB, 'text-一人公司 + AI 团队');
   if (title) {
@@ -964,37 +981,71 @@ function buildEnglishOnly(faceA, faceB) {
       'One-Person Company + AI Team',
       box.min.x,
       box.min.z,
-      Math.max(0.26, (box.max.z - box.min.z) * 0.7),
-      Math.max(1.8, Math.min(3.2, -1.75 - box.min.x)),
-      0.18,
+      Math.max(0.34, (box.max.z - box.min.z) * 0.62),
+      Math.max(1.8, Math.min(3.15, -1.7 - box.min.x)),
+      0.2,
       'team',
       false,
+      { italic: true, weight: 500, family: SERIF, size: 280, lineBox: 320 },
     );
   }
-  for (const [source, line, id] of [
-    ['text-邮箱 Email', 'Email', 'email'],
-    ['text-微信 WeChat', 'WeChat', 'wechat'],
-    ['text-电话 Phone', 'Phone', 'phone'],
-  ]) {
-    const mesh = findLine(faceB, source);
-    if (!mesh) continue;
-    const box = localBounds(mesh, faceB);
-    addPlainLabel(
-      faceB,
-      line,
-      box.min.x,
-      box.min.z,
-      Math.max(0.18, box.max.z - box.min.z),
-      Math.max(1.1, box.max.x - box.min.x),
-      0.18,
-      id,
-      true,
-    );
+  const anchor = findLine(faceB, 'text-邮箱 Email');
+  const qr = faceB.getObjectByName('whatsapp-qr');
+  const anchorBox = anchor ? localBounds(anchor, faceB) : { min: { x: -4.15, z: 0.8 } };
+  const qrBottom = qr ? localBounds(qr, faceB).max.z : anchorBox.min.z - 0.2;
+  const rows = [
+    ['Email', 'dengletian702@gmail.com', 'email'],
+    ['WeChat', 'LYanogen', 'wechat'],
+    ['Phone', '+64 2902723630', 'phone'],
+  ];
+  let rowZ = Math.max(anchorBox.min.z, qrBottom + 0.14);
+  const rowX = anchorBox.min.x;
+  const rowHeight = 0.3;
+  for (const [label, value, id] of rows) {
+    const labelWidth = addPlainLabel(faceB, label, rowX, rowZ, rowHeight, 1.7, 0.2, id, true, {
+      caps: true, weight: 600, family: SERIF, tracking: '8px', size: 220, lineBox: 260,
+    });
+    void labelWidth;
+    const labelMesh = faceB.getObjectByName(`text-en-only-${id}`);
+    const labelRight = labelMesh ? localBounds(labelMesh, faceB).max.x : rowX + 1.2;
+    addPlainLabel(faceB, value, labelRight + 0.1, rowZ, rowHeight * 0.92, 2.7, 0.2, `${id}-value`, true, {
+      italic: false, weight: 500, family: SERIF, size: 220, lineBox: 260,
+    });
+    rowZ += rowHeight + 0.08;
   }
 }
 
-function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single) {
-  const { texture, aspect, lines } = makeCaptionTexture(text, maxWidth / lineHeight, single);
+function tuckJamesNearScript(faceA) {
+  const james = findLine(faceA, 'text-(James)');
+  const script = findLine(faceA, 'name-flower-dots');
+  if (!james || !script) return;
+  const jb = localBounds(james, faceA);
+  const sb = localBounds(script, faceA);
+  const targetTop = sb.max.z + 0.02;
+  const dz = Math.min(0, targetTop - jb.min.z);
+  const scriptRight = sb.min.x + (sb.max.x - sb.min.x) * 0.72;
+  const dx = Math.max(-0.35, Math.min(0.2, scriptRight - jb.max.x));
+  jamesHome = { mesh: james, x: james.position.x, z: james.position.z, dx, dz };
+}
+
+function applyJamesTuck(english) {
+  if (!jamesHome) return;
+  const { mesh, x, z, dx, dz } = jamesHome;
+  mesh.position.x = x + (english ? dx : 0);
+  mesh.position.z = z + (english ? dz : 0);
+  const shadow = mesh.parent?.getObjectByName(`shadow-${mesh.name}`);
+  if (shadow && shadow.userData.homeX === undefined) {
+    shadow.userData.homeX = shadow.position.x;
+    shadow.userData.homeZ = shadow.position.z;
+  }
+  if (shadow?.userData.homeX !== undefined) {
+    shadow.position.x = shadow.userData.homeX + (english ? dx : 0);
+    shadow.position.z = shadow.userData.homeZ + (english ? dz : 0);
+  }
+}
+
+function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single, style) {
+  const { texture, aspect, lines } = makeCaptionTexture(text, maxWidth / lineHeight, single, style);
   let height = lineHeight * lines;
   let width = height * aspect;
   if (width > maxWidth) {
@@ -1043,12 +1094,9 @@ function hiddenWhenEnglish(name) {
   const base = name.startsWith('shadow-') ? name.slice('shadow-'.length) : name;
   if (base.startsWith('text-en-only-') || base.startsWith('en-only-')) return false;
   if (base.startsWith('text-en-')) return true;
-  if (base.startsWith('name-flower')) return true;
-  if (base.startsWith('text-(James)')) return true;
-  if (base === 'seal' || base.startsWith('text-乐')) return true;
-  if (base.startsWith('text-邓')) return true;
   if (/懂业务|营销|一人公司|基督城|邮箱|微信|电话/.test(base)) return true;
   if (base.startsWith('text-Christchurch')) return true;
+  if (/dengletian/i.test(base) || /LYanogen/.test(base) || /\+64|290272/.test(base)) return true;
   return false;
 }
 
@@ -1066,6 +1114,7 @@ function applyLanguage(lang, updateUrl) {
       if (hiddenWhenEnglish(name)) object.visible = !english;
     });
   }
+  applyJamesTuck(english);
   const zh = document.getElementById('footer-zh');
   const en = document.getElementById('footer-en');
   if (zh) zh.hidden = english;
