@@ -124,6 +124,35 @@ footer {
   pointer-events: none;
 }
 
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+#lang {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(8, 10, 18, 0.72);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+#lang:hover,
+#lang[aria-pressed='true'] {
+  background: rgba(16, 20, 34, 0.9);
+}
+
+#lang:focus-visible {
+  outline: 2px solid #c9d6ff;
+  outline-offset: 3px;
+}
+
 footer a {
   pointer-events: auto;
   color: inherit;

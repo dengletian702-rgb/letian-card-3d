@@ -10,6 +10,10 @@ import './style.css';
 
 const MODEL_URL = `${import.meta.env.BASE_URL}card-island.glb`;
 const FOV = 27;
+const CARD_W = 9.05;
+const CARD_H = 5.42;
+const CARD_HALF_W = CARD_W / 2;
+const CARD_HALF_H = CARD_H / 2;
 const FIT_MARGIN = 1.075;
 const IDLE_MS = 2600;
 const FLIP_MS = 860;
@@ -17,6 +21,7 @@ const BURST_MS = 780;
 const AUTO_ROTATE_SPEED = 0.7;
 
 const recordDpr = Number(new URLSearchParams(window.location.search).get('dpr')) || 0;
+let cardLang = new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh';
 
 const canvas = document.getElementById('view');
 const loadingEl = document.getElementById('loading');
@@ -206,6 +211,9 @@ function easeInOut(t) {
 }
 
 flipButton.addEventListener('click', flip);
+document.getElementById('lang')?.addEventListener('click', () => {
+  applyLanguage(cardLang === 'en' ? 'zh' : 'en', true);
+});
 
 let lastTap = 0;
 let pointerDown = null;
@@ -558,6 +566,7 @@ async function dressCard(root) {
   addEnglishCaptions(faceA, faceB);
   addBackPlates(faceB);
   addTypeShadows(root);
+  applyLanguage(cardLang, false);
   const glass = buildGlassPanel(faceA);
   const skyMaps = await loadSkyMaps();
   const front = buildFrontSky(faceA, skyMaps, terrain);
@@ -576,10 +585,13 @@ async function dressCard(root) {
   };
 }
 
+const CARD_MARGIN = CARD_H * 0.05;
+const TEXT_BOTTOM = CARD_HALF_H - CARD_MARGIN;
+
 const CAPTIONS = [
-  { source: 'text-懂业务，也能把它做出来。', line: 'I understand the business, and I can build it.', sx: 1.08, sz: 1.4, limitX: -1.25 },
-  { source: 'text-AI · 营销 · 设计', line: 'AI · Marketing · Design', sx: 1.12, sz: 1.45, limitX: -1.25 },
-  { source: 'text-Christchurch', line: 'Christchurch, New Zealand', sx: 1.1, sz: 1.35, limitX: -1.25, floorZ: 2.28 },
+  { source: 'text-懂业务，也能把它做出来。', line: 'I understand the business, and I can build it.', sx: 1.08, sz: 1.28, limitX: -1.25 },
+  { source: 'text-AI · 营销 · 设计', line: 'AI · Marketing · Design', sx: 1.1, sz: 1.32, limitX: -1.02, single: true },
+  { source: 'text-Christchurch', line: 'Christchurch, New Zealand', sx: 1.08, sz: 1.22, limitX: -1.15, floorZ: TEXT_BOTTOM },
   { source: 'text-一人公司 + AI 团队', line: 'One-Person Company + AI Team', sx: 1.08, sz: 1.22, limitX: -1.85, floorZ: -0.92 },
 ];
 
@@ -590,10 +602,11 @@ function findLine(root, source) {
 function addEnglishCaptions(faceA, faceB) {
   enlargeFaceText(faceA, [
     { name: 'text-邓乐天', sx: 1.22, sz: 1.28 },
-    { name: 'name-flower-dots', sx: 1.08, sz: 1.12 },
-    { name: 'text-(James)', sx: 1.18, sz: 1.22 },
+    { name: 'name-flower-dots', sx: 1.08 * 0.7, sz: 1.12 * 0.7 },
+    { name: 'text-(James)', sx: 1.18 * 0.7, sz: 1.22 * 0.7 },
   ]);
   enlargeFaceText(faceB, faceBTextNames(faceB).map((name) => ({ name, sx: 1.12, sz: 1.22 })));
+  enlargeContactRows(faceB);
   const frontStack = [];
   for (const caption of CAPTIONS) {
     const source = findLine(faceA, caption.source) || findLine(faceB, caption.source);
@@ -613,6 +626,9 @@ function addEnglishCaptions(faceA, faceB) {
   }
   packFrontStack(frontStack);
   clearContactHeadline(faceB);
+  addBackScrim(faceB);
+  buildEnglishOnly(faceA, faceB);
+  applyLanguage(cardLang, false);
 }
 
 function clearContactHeadline(faceB) {
@@ -680,21 +696,119 @@ function growFromTopLeft(mesh, parent, scaleX, scaleZ) {
 
 function packFrontStack(stack) {
   if (!stack.length) return;
-  let cursor = localBounds(stack[0].source, stack[0].parent).min.z;
+  const parent = stack[0].parent;
+  const james = findLine(parent, 'text-(James)');
+  const ceiling = james ? localBounds(james, parent).max.z + 0.1 : localBounds(stack[0].source, parent).min.z;
+  let cursor = ceiling;
   for (const item of stack) {
-    const box = localBounds(item.source, item.parent);
+    const box = localBounds(item.source, parent);
     item.source.position.z += cursor - box.min.z;
-    const placed = localBounds(item.source, item.parent);
-    const used = placeCaption(item.source, item.parent, item.caption, placed, true);
-    cursor = used + 0.05;
+    const placed = localBounds(item.source, parent);
+    const used = placeCaption(item.source, parent, item.caption, placed, true);
+    cursor = used + 0.03;
   }
+  const overflow = cursor - 0.03 - TEXT_BOTTOM;
+  if (overflow > 0.01) squeezeFrontStack(stack, parent, ceiling, overflow);
+}
+
+function squeezeFrontStack(stack, parent, anchor, overflow) {
+  const nodes = [];
+  for (const item of stack) {
+    nodes.push(item.source);
+    const captionName = `text-en-${item.caption.line.slice(0, 18)}`;
+    const caption = parent.children.find((child) => child.name === captionName);
+    const shadow = parent.children.find((child) => child.name === `shadow-${captionName}`);
+    if (caption) nodes.push(caption);
+    if (shadow) nodes.push(shadow);
+  }
+  let bottom = anchor;
+  for (const node of nodes) bottom = Math.max(bottom, localBounds(node, parent).max.z);
+  const span = Math.max(0.2, bottom - anchor);
+  const scale = Math.max(0.72, (span - overflow) / span);
+  for (const node of nodes) {
+    const box = localBounds(node, parent);
+    const height = Math.max(0.001, box.max.z - box.min.z);
+    const top = box.min.z;
+    if (node.name.startsWith('text-en-') || node.name.startsWith('shadow-text-en-')) node.scale.y *= scale;
+    else node.scale.z *= scale;
+    const next = localBounds(node, parent);
+    node.position.z += top - next.min.z;
+    const placedTop = anchor + (top - anchor) * scale;
+    node.position.z += placedTop - top;
+    void height;
+  }
+}
+
+function enlargeContactRows(faceB) {
+  if (!faceB) return;
+  const meshes = [];
+  faceB.traverse((object) => {
+    if (!object.isMesh) return;
+    const name = object.name || '';
+    if (!isContactRow(name)) return;
+    meshes.push(object);
+  });
+  const items = meshes.map((mesh) => {
+    const box = growFromTopLeft(mesh, faceB, 1.4, 1.4);
+    return { mesh, z: box.min.z, max: box.max.z };
+  });
+  items.sort((a, b) => a.z - b.z);
+  const rows = [];
+  for (const item of items) {
+    const row = rows.find((entry) => Math.abs(entry.z - item.z) < 0.14);
+    if (row) {
+      row.items.push(item);
+      row.z = Math.min(row.z, item.z);
+    } else {
+      rows.push({ z: item.z, items: [item] });
+    }
+  }
+  if (!rows.length) return;
+  const qr = faceB.getObjectByName('whatsapp-qr');
+  const qrBottom = qr ? localBounds(qr, faceB).max.z : -1;
+  let cursor = Math.max(rows[0].z, qrBottom + 0.1);
+  for (const row of rows) {
+    const shift = cursor - row.z;
+    let rowMax = -Infinity;
+    for (const item of row.items) {
+      item.mesh.position.z += shift;
+      rowMax = Math.max(rowMax, localBounds(item.mesh, faceB).max.z);
+    }
+    cursor = rowMax + 0.055;
+    const labels = row.items.filter((item) => /邮箱|微信|电话|WhatsApp/i.test(item.mesh.name || ''));
+    const values = row.items.filter((item) => !labels.includes(item));
+    if (labels.length && values.length) {
+      let labelRight = -Infinity;
+      for (const label of labels) {
+        labelRight = Math.max(labelRight, localBounds(label.mesh, faceB).max.x);
+      }
+      for (const value of values) {
+        const box = localBounds(value.mesh, faceB);
+        value.mesh.position.x += labelRight + 0.08 - box.min.x;
+      }
+    }
+  }
+  const overflow = cursor - 0.055 - TEXT_BOTTOM;
+  if (overflow > 0.01) {
+    const shift = Math.min(overflow, Math.max(0, rows[0].z - qrBottom - 0.1));
+    for (const row of rows) {
+      for (const item of row.items) item.mesh.position.z -= shift;
+    }
+  }
+}
+
+function isContactRow(name) {
+  if (/qr/i.test(name)) return false;
+  return /邮箱|微信|电话|dengletian|LYanogen|\+64|^text-WhatsApp|^shadow-text-WhatsApp/i.test(name)
+    && !name.startsWith('shadow-en-')
+    && !name.startsWith('text-en-');
 }
 
 function placeCaption(source, parent, caption, box, onFront) {
   const chinese = Math.max(0.12, box.max.z - box.min.z);
   const lineHeight = chinese * 0.78;
   const maxWidth = Math.max(0.8, Math.min(box.max.x, caption.limitX) - box.min.x);
-  const { texture, aspect, lines } = makeCaptionTexture(caption.line, maxWidth / lineHeight);
+  const { texture, aspect, lines } = makeCaptionTexture(caption.line, maxWidth / lineHeight, caption.single);
   let height = lineHeight * lines;
   let width = height * aspect;
   if (width > maxWidth) {
@@ -721,7 +835,7 @@ function placeCaption(source, parent, caption, box, onFront) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
   mesh.name = `text-en-${caption.line.slice(0, 18)}`;
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(box.min.x + width / 2, onFront ? 0.74 : 0.18, box.max.z + 0.02 + height / 2);
+  mesh.position.set(box.min.x + width / 2, onFront ? 0.74 : 0.18, box.max.z + 0.012 + height / 2);
   mesh.renderOrder = 3;
   mesh.castShadow = false;
   mesh.receiveShadow = false;
@@ -788,13 +902,13 @@ function splitCaption(text) {
   return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
 }
 
-function makeCaptionTexture(text, maxAspect) {
+function makeCaptionTexture(text, maxAspect, single) {
   const fontPx = 256;
   const font = `600 ${fontPx}px "Segoe UI", Helvetica, Arial, sans-serif`;
   const probe = document.createElement('canvas').getContext('2d');
   probe.font = font;
   const singleWidth = probe.measureText(text).width;
-  const lines = singleWidth / fontPx > maxAspect ? splitCaption(text) : [text];
+  const lines = !single && singleWidth / fontPx > maxAspect ? splitCaption(text) : [text];
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   const padX = 28;
@@ -818,6 +932,156 @@ function makeCaptionTexture(text, maxAspect) {
   texture.magFilter = THREE.LinearFilter;
   texture.needsUpdate = true;
   return { texture, aspect: canvas.width / canvas.height, lines: lines.length };
+}
+
+function buildEnglishOnly(faceA, faceB) {
+  const name = findLine(faceA, 'text-邓乐天');
+  const nameBox = name ? localBounds(name, faceA) : { min: { x: -4.15, z: -2.15 } };
+  const x = nameBox.min.x;
+  let z = nameBox.min.z;
+  const maxWidth = Math.max(2.4, -0.95 - x);
+  z = addPlainLabel(faceA, 'Letian Deng (James)', x, z, 0.56, maxWidth, 0.74, 'name', true);
+  z += 0.14;
+  z = addPlainLabel(faceA, 'I understand the business, and I can build it.', x, z, 0.4, Math.min(maxWidth, 3.15), 0.74, 'tagline', false);
+  z += 0.12;
+  z = addPlainLabel(faceA, 'AI · Marketing · Design', x, z, 0.42, maxWidth, 0.74, 'skills', true);
+  z += 0.12;
+  z = addPlainLabel(faceA, 'Christchurch, New Zealand', x, z, 0.4, maxWidth, 0.74, 'place', true);
+  if (z > TEXT_BOTTOM) {
+    const lift = z - TEXT_BOTTOM;
+    faceA.traverse((object) => {
+      if (object.name?.startsWith('text-en-only-') || object.name?.startsWith('shadow-en-only-')) {
+        object.position.z -= lift;
+      }
+    });
+  }
+
+  const title = findLine(faceB, 'text-一人公司 + AI 团队');
+  if (title) {
+    const box = localBounds(title, faceB);
+    addPlainLabel(
+      faceB,
+      'One-Person Company + AI Team',
+      box.min.x,
+      box.min.z,
+      Math.max(0.26, (box.max.z - box.min.z) * 0.7),
+      Math.max(1.8, Math.min(3.2, -1.75 - box.min.x)),
+      0.18,
+      'team',
+      false,
+    );
+  }
+  for (const [source, line, id] of [
+    ['text-邮箱 Email', 'Email', 'email'],
+    ['text-微信 WeChat', 'WeChat', 'wechat'],
+    ['text-电话 Phone', 'Phone', 'phone'],
+  ]) {
+    const mesh = findLine(faceB, source);
+    if (!mesh) continue;
+    const box = localBounds(mesh, faceB);
+    addPlainLabel(
+      faceB,
+      line,
+      box.min.x,
+      box.min.z,
+      Math.max(0.18, box.max.z - box.min.z),
+      Math.max(1.1, box.max.x - box.min.x),
+      0.18,
+      id,
+      true,
+    );
+  }
+}
+
+function addPlainLabel(parent, text, x, z, lineHeight, maxWidth, y, id, single) {
+  const { texture, aspect, lines } = makeCaptionTexture(text, maxWidth / lineHeight, single);
+  let height = lineHeight * lines;
+  let width = height * aspect;
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = width / aspect;
+  }
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+  mesh.name = `text-en-only-${id}`;
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(x + width / 2, y, z + height / 2);
+  mesh.renderOrder = 3;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  const shadow = new THREE.Mesh(
+    mesh.geometry,
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      color: 0x140e0a,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  shadow.name = `shadow-en-only-${id}`;
+  shadow.rotation.copy(mesh.rotation);
+  shadow.position.copy(mesh.position);
+  shadow.position.x += 0.01;
+  shadow.position.z += 0.009;
+  shadow.position.y -= 0.01;
+  shadow.renderOrder = 2;
+  parent.add(shadow, mesh);
+  return mesh.position.z + height / 2;
+}
+
+function hiddenWhenEnglish(name) {
+  const base = name.startsWith('shadow-') ? name.slice('shadow-'.length) : name;
+  if (base.startsWith('text-en-only-') || base.startsWith('en-only-')) return false;
+  if (base.startsWith('text-en-')) return true;
+  if (base.startsWith('name-flower')) return true;
+  if (base.startsWith('text-(James)')) return true;
+  if (base === 'seal' || base.startsWith('text-乐')) return true;
+  if (base.startsWith('text-邓')) return true;
+  if (/懂业务|营销|一人公司|基督城|邮箱|微信|电话/.test(base)) return true;
+  if (base.startsWith('text-Christchurch')) return true;
+  return false;
+}
+
+function applyLanguage(lang, updateUrl) {
+  cardLang = lang === 'en' ? 'en' : 'zh';
+  const english = cardLang === 'en';
+  if (pivot) {
+    pivot.traverse((object) => {
+      const name = object.name || '';
+      if (!name) return;
+      if (name.startsWith('text-en-only-') || name.startsWith('shadow-en-only-')) {
+        object.visible = english;
+        return;
+      }
+      if (hiddenWhenEnglish(name)) object.visible = !english;
+    });
+  }
+  const zh = document.getElementById('footer-zh');
+  const en = document.getElementById('footer-en');
+  if (zh) zh.hidden = english;
+  if (en) en.hidden = !english;
+  const button = document.getElementById('lang');
+  if (button) {
+    button.textContent = english ? '中' : 'EN';
+    button.setAttribute('aria-pressed', english ? 'true' : 'false');
+    button.setAttribute('aria-label', english ? '显示中英双语' : 'Show English');
+  }
+  if (updateUrl) {
+    const url = new URL(window.location.href);
+    if (english) url.searchParams.set('lang', 'en');
+    else url.searchParams.delete('lang');
+    window.history.replaceState(null, '', url);
+  }
 }
 
 function recolorTrim(object, color, metalness, roughness, envMapIntensity = 0.4) {
@@ -846,6 +1110,8 @@ function addTypeShadows(root) {
     polygonOffsetFactor: 2,
     polygonOffsetUnits: 2,
   });
+  const backInk = ink.clone();
+  backInk.opacity = 0.82;
   const meshes = [];
   root.traverse((object) => {
     if (!object.isMesh) return;
@@ -854,13 +1120,14 @@ function addTypeShadows(root) {
     meshes.push(object);
   });
   for (const mesh of meshes) {
-    const shadow = new THREE.Mesh(mesh.geometry, ink);
+    const onBack = isOnFace(mesh, 'faceB-forest');
+    const shadow = new THREE.Mesh(mesh.geometry, onBack ? backInk : ink);
     shadow.name = `shadow-${mesh.name}`;
     shadow.position.copy(mesh.position);
     shadow.quaternion.copy(mesh.quaternion);
     shadow.scale.copy(mesh.scale);
-    shadow.position.x += 0.007;
-    shadow.position.z += 0.006;
+    shadow.position.x += onBack ? 0.012 : 0.007;
+    shadow.position.z += onBack ? 0.011 : 0.006;
     shadow.position.y -= 0.008;
     shadow.castShadow = false;
     shadow.receiveShadow = false;
@@ -871,6 +1138,78 @@ function addTypeShadows(root) {
 
 const PLATE_RADIUS = 0.12;
 const PLATE_HAIRLINE = 0.01;
+
+function isOnFace(object, faceName) {
+  let node = object;
+  while (node) {
+    if (node.name === faceName) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
+function addBackScrim(faceB) {
+  if (!faceB) return;
+  const boxes = [];
+  faceB.updateWorldMatrix(true, true);
+  faceB.traverse((object) => {
+    if (!object.isMesh) return;
+    const name = object.name || '';
+    if (name.startsWith('shadow-') || name === 'whatsapp-qr' || !isLettering(name)) return;
+    boxes.push(localBounds(object, faceB));
+  });
+  if (!boxes.length) return;
+  const qr = faceB.getObjectByName('whatsapp-qr');
+  const qrBox = qr ? localBounds(qr, faceB) : null;
+  const above = [];
+  const below = [];
+  const beside = [];
+  for (const box of boxes) {
+    if (!qrBox) {
+      above.push(box);
+      continue;
+    }
+    if (box.max.z < qrBox.min.z - 0.02) above.push(box);
+    else if (box.min.z > qrBox.max.z + 0.02) below.push(box);
+    else beside.push(box);
+  }
+  for (const group of [above, below]) placeScrim(faceB, group, 0.16, 0.1);
+  for (const box of beside) placeScrim(faceB, [box], 0.08, 0.04);
+}
+
+function placeScrim(parent, boxes, padX, padZ) {
+  if (!boxes.length) return;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const box of boxes) {
+    minX = Math.min(minX, box.min.x);
+    maxX = Math.max(maxX, box.max.x);
+    minZ = Math.min(minZ, box.min.z);
+    maxZ = Math.max(maxZ, box.max.z);
+  }
+  const width = maxX - minX + padX * 2;
+  const height = maxZ - minZ + padZ * 2;
+  const scrim = new THREE.Mesh(
+    new THREE.ShapeGeometry(roundedRectShape(width, height, Math.min(0.14, height / 2)), 8),
+    new THREE.MeshBasicMaterial({
+      color: 0x070c08,
+      transparent: true,
+      opacity: 0.46,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  scrim.name = 'back-text-scrim';
+  scrim.rotation.x = -Math.PI / 2;
+  scrim.position.set((minX + maxX) / 2, 0.055, (minZ + maxZ) / 2);
+  scrim.renderOrder = 1;
+  parent.add(scrim);
+}
 
 function addBackPlates(faceB) {
   if (!faceB) return;
@@ -1144,10 +1483,6 @@ async function buildLunarTerrain(faceA) {
   return { mesh, heightAt };
 }
 
-const CARD_W = 9.05;
-const CARD_H = 5.42;
-const CARD_HALF_W = CARD_W / 2;
-const CARD_HALF_H = CARD_H / 2;
 const RELIEF_AMP = 0.82;
 const PLATEAU_LEVEL = 0.56;
 const EMBEDDED = [
@@ -1982,6 +2317,12 @@ window.__card = {
     return rendererName;
   },
   flip,
+  get lang() {
+    return cardLang;
+  },
+  setLang(lang) {
+    applyLanguage(lang, true);
+  },
   setYaw(radians) {
     controls.autoRotate = false;
     pivot.rotation.y = radians;
