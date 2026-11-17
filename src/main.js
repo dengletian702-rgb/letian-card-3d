@@ -548,6 +548,7 @@ async function dressCard(root) {
   const faceB = root.getObjectByName('faceB-forest');
   tuckBackInside();
   const terrain = await buildLunarTerrain(faceA);
+  addEnglishCaptions(faceA, faceB);
   addBackPlates(faceB);
   addTypeShadows(root);
   const glass = buildGlassPanel(faceA);
@@ -566,6 +567,114 @@ async function dressCard(root) {
       forest.setPresence(1 - amount);
     },
   };
+}
+
+const CAPTIONS = [
+  { source: 'text-懂业务，也能把它做出来。', line: 'I understand the business, and I can build it.', height: 0.145 },
+  { source: 'text-AI · 营销 · 设计', line: 'AI · Marketing · Design', height: 0.13 },
+  { source: 'text-Christchurch', line: 'Christchurch, New Zealand', height: 0.125 },
+  { source: 'text-一人公司 + AI 团队', line: 'One-Person Company + AI Team', height: 0.15 },
+];
+
+function findLine(root, source) {
+  return root?.getObjectByName(source) || root?.getObjectByName(source.replaceAll(' ', '_'));
+}
+
+function addEnglishCaptions(faceA, faceB) {
+  for (const caption of CAPTIONS) {
+    const source = findLine(faceA, caption.source) || findLine(faceB, caption.source);
+    if (!source) continue;
+    const parent = source.parent;
+    const box = localBounds(source, parent);
+    const { texture, aspect } = makeCaptionTexture(caption.line);
+    let height = caption.height;
+    let width = height * aspect;
+    const maxWidth = Math.max(0.4, box.max.x - box.min.x);
+    if (width > maxWidth) {
+      width = maxWidth;
+      height = width / aspect;
+    }
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+    mesh.name = `text-en-${caption.line.slice(0, 18)}`;
+    mesh.rotation.x = -Math.PI / 2;
+    const onFront = parent === faceA;
+    mesh.position.set(box.min.x + width / 2, onFront ? 0.72 : 0.16, box.max.z + 0.035 + height / 2);
+    mesh.renderOrder = 3;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    const shadow = new THREE.Mesh(
+      mesh.geometry,
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        color: 0x140e0a,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    shadow.name = `shadow-${mesh.name}`;
+    shadow.rotation.copy(mesh.rotation);
+    shadow.position.copy(mesh.position);
+    shadow.position.x += 0.008;
+    shadow.position.z += 0.007;
+    shadow.position.y -= 0.01;
+    shadow.renderOrder = 2;
+    parent.add(shadow, mesh);
+  }
+}
+
+function localBounds(object, parent) {
+  const box = new THREE.Box3().setFromObject(object);
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const corners = [
+    [box.min.x, box.min.y, box.min.z],
+    [box.min.x, box.min.y, box.max.z],
+    [box.min.x, box.max.y, box.min.z],
+    [box.min.x, box.max.y, box.max.z],
+    [box.max.x, box.min.y, box.min.z],
+    [box.max.x, box.min.y, box.max.z],
+    [box.max.x, box.max.y, box.min.z],
+    [box.max.x, box.max.y, box.max.z],
+  ];
+  for (const [x, y, z] of corners) {
+    const point = parent.worldToLocal(new THREE.Vector3(x, y, z));
+    min.min(point);
+    max.max(point);
+  }
+  return { min, max };
+}
+
+function makeCaptionTexture(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const font = '600 72px "Segoe UI", Helvetica, Arial, sans-serif';
+  ctx.font = font;
+  const padX = 8;
+  const measured = Math.ceil(ctx.measureText(text).width + padX * 2);
+  canvas.width = Math.max(64, measured);
+  canvas.height = 96;
+  ctx.font = font;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#F4F2EC';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillText(text, padX, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  texture.needsUpdate = true;
+  return { texture, aspect: canvas.width / canvas.height };
 }
 
 function recolorTrim(object, color, metalness, roughness, envMapIntensity = 0.4) {
@@ -598,7 +707,7 @@ function addTypeShadows(root) {
   root.traverse((object) => {
     if (!object.isMesh) return;
     const name = object.name || '';
-    if (name.startsWith('shadow-') || isSealScript(name) || !isLettering(name)) return;
+    if (name.startsWith('shadow-') || name.startsWith('text-en-') || isSealScript(name) || !isLettering(name)) return;
     meshes.push(object);
   });
   for (const mesh of meshes) {
@@ -1726,6 +1835,10 @@ window.__card = {
     return rendererName;
   },
   flip,
+  setYaw(radians) {
+    controls.autoRotate = false;
+    pivot.rotation.y = radians;
+  },
   /**
    * Hold the flip at progress u (0 front, 1 back) for screenshots.
    * Pass null to release the scrub.
