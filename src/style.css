@@ -118,10 +118,39 @@ footer {
   align-items: center;
   gap: 12px;
   padding: 14px 18px calc(12px + env(safe-area-inset-bottom));
-  font-size: 13px;
+  font-size: 18px;
   line-height: 1.4;
   color: var(--ink-soft);
   pointer-events: none;
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+#lang {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(8, 10, 18, 0.72);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+#lang:hover,
+#lang[aria-pressed='true'] {
+  background: rgba(16, 20, 34, 0.9);
+}
+
+#lang:focus-visible {
+  outline: 2px solid #c9d6ff;
+  outline-offset: 3px;
 }
 
 footer a {
@@ -202,7 +231,7 @@ footer a:hover {
   }
 
   footer {
-    font-size: 12px;
+    font-size: 16px;
     padding-inline: 12px;
   }
 }
