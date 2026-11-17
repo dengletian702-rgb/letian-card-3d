@@ -14,6 +14,14 @@
   src: url("./fonts/noto-sans-sc-500.ttf") format("truetype");
 }
 
+@font-face {
+  font-family: "Noto Serif SC";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/noto-serif-sc-600.woff2") format("woff2");
+}
+
 :root {
   color-scheme: dark;
   --ink: #f4f0e8;
